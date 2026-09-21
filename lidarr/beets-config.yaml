@@ -1,5 +1,5 @@
-plugins: chroma embedart lastgenre lyrics
-art_filename: folder
+plugins: musicbrainz chroma embedart lastgenre lyrics deezer mbsync
+art_filename: coverart
 threaded: yes
 per_disc_numbering: yes
 id3v23: no
@@ -7,11 +7,12 @@ asciify_paths: true
 
 lyrics:
     auto: yes
-    sources: lrclib genius tekstowo
+    sources: [lrclib, lrcmux, genius]
     synced: yes
+    keep_synced: yes
 
 match:
-    strong_rec_thresh: 0.10 # 0.04
+    strong_rec_thresh: 0.04
     medium_rec_thresh: 0.25 # 0.25
     rec_gap_thresh: 0.25 # 0.25
     max_rec:
@@ -43,7 +44,7 @@ match:
         countries: [] # []
         media: [] # []
         original_year: no # no
-    ignored: ['missing_tracks', 'track_length', 'unmatched_tracks', 'track_index'] # []
+    ignored: []
     required: [] # []
     ignored_media: [] # []
     ignore_data_tracks: yes # yes
@@ -71,7 +72,7 @@ import:
     group_albums: no
 
 chroma:
-    auto: no
+    auto: yes
 
 embedart:
     auto: yes
@@ -79,12 +80,23 @@ embedart:
 lastgenre:
     auto: yes
     canonical: yes
-    count: 3
-    fallback: None
+    count: 5
+    fallback: null
     force: yes
     min_weight: 10
     prefer_specific: no
     source: album
-    separator: '; '
     whitelist: /config/extended/beets-genre-whitelist.txt
     title_case: yes
+
+musicbrainz:
+    data_source_mismatch_penalty: 0.0
+    genres: no
+    external_ids:
+        spotify: yes
+        bandcamp: yes
+        deezer: yes
+        tidal: yes
+
+deezer:
+    data_source_mismatch_penalty: 0.5
