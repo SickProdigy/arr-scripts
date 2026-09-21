@@ -53,10 +53,12 @@ match:
     track_length_max: 30 # 30
 
 paths:
-    default: $disc$track - $title
-    singleton: $disc$track - $title
-    comp: $disc$track - $title
-    albumtype_soundtrack: $disc$track - $title
+    # Display-only equivalent of the Lidarr naming formats; import does not move files.
+    "disctotal:2..": $album ($year)/CD$disc/$artist-$album-CD$disc-$track-$title-[$bitrate]-$data_source
+    default: $album ($year)/$artist-$album-$track-$title-[$bitrate]-$data_source
+    singleton: $artist-$title-[$bitrate]-$data_source
+    comp: $album ($year)/$artist-$album-$track-$title-[$bitrate]-$data_source
+    albumtype_soundtrack: $album ($year)/$artist-$album-$track-$title-[$bitrate]-$data_source
         
 import:
     write: yes
