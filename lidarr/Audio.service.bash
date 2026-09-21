@@ -118,8 +118,15 @@ verifyConfig () {
   fi
 
   if [ -z "$failedDownloadRetryDays" ]; then
-  	failedDownloadRetryDays="7"
+	failedDownloadRetryDays="7"
   fi
+
+  if [ -z "$deezerDetailLookupLimit" ]; then
+	deezerDetailLookupLimit="20"
+  fi
+	if [[ ! "$deezerDetailLookupLimit" =~ ^[1-9][0-9]*$ ]]; then
+		deezerDetailLookupLimit="20"
+	fi
 
   if [ -z "$tidalClientTestDownloadId" ]; then
   	tidalClientTestDownloadId="166356219"
@@ -262,6 +269,7 @@ Configuration () {
 
  	log "Failed Download Attempt Threshold: $failedDownloadAttemptThreshold"
 	log "Failed Download Retry Cooldown: $failedDownloadRetryDays days"
+	log "Deezer Detail Lookup Limit: $deezerDetailLookupLimit"
 	
 }
 
@@ -1554,11 +1562,25 @@ ArtistDeezerSearch () {
 
 	resultsCount=$(echo "$deezerArtistAlbumsIds" | wc -l)
 	log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $resultsCount search results found"
+	deezerCandidatesConsidered=0
+	deezerDetailsFetched=0
 	for deezerAlbumID in $(echo "$deezerArtistAlbumsIds"); do
+		deezerCandidatesConsidered=$((deezerCandidatesConsidered + 1))
 		deezerAlbumData="$(echo "$deezerArtistAlbumsData" | jq -r "select(.id==$deezerAlbumID)")"
 		deezerAlbumTitle="$(echo "$deezerAlbumData" | jq -r ".title")"
 		deezerAlbumTitleClean="$(echo ${deezerAlbumTitle} | sed -e "s%[^[:alpha:][:digit:]]%%g" -e "s/  */ /g" | sed 's/^[.]*//' | sed  's/[.]*$//g' | sed  's/^ *//g' | sed 's/ *$//g')"
-  		deezerAlbumTitleClean="${deezerAlbumTitleClean:0:130}"		
+		deezerAlbumTitleClean="${deezerAlbumTitleClean:0:130}"
+		if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
+			continue
+		fi
+		if [ "$diff" -gt "$matchDistance" ]; then
+			continue
+		fi
+		if [ "$deezerDetailsFetched" -ge "$deezerDetailLookupLimit" ]; then
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: Detail lookup limit reached ($deezerDetailLookupLimit); stopping candidate expansion..."
+			break
+		fi
+		deezerDetailsFetched=$((deezerDetailsFetched + 1))
 		if ! GetDeezerAlbumInfo "$deezerAlbumID"; then
 			continue
 		fi
@@ -1578,28 +1600,19 @@ ArtistDeezerSearch () {
 			continue
 		fi
 		
-		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Checking for Match..."
-		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Calculating Damerau-Levenshtein distance..."
-		if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
-			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
-			continue
-		fi
-		if [ "$diff" -le "$matchDistance" ]; then
-			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
+		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
 
-			# Execute Download
-			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer  :: $type :: $lidarrReleaseTitle :: Downloading $deezerAlbumTrackCount Tracks :: $deezerAlbumTitle ($downloadedReleaseYear)"
+		# Execute Download
+		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer  :: $type :: $lidarrReleaseTitle :: Downloading $deezerAlbumTrackCount Tracks :: $deezerAlbumTitle ($downloadedReleaseYear)"
 			
-			DownloadProcess "$deezerAlbumID" "DEEZER" "$downloadedReleaseYear" "$deezerAlbumTitle" "$deezerAlbumTrackCount"
-		else
-			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer  Match Not Found :: Calculated Difference ($diff) greater than $matchDistance"
-		fi
+		DownloadProcess "$deezerAlbumID" "DEEZER" "$downloadedReleaseYear" "$deezerAlbumTitle" "$deezerAlbumTrackCount"
 
 		# End search if lidarr was successfully notified for import
 		if [ "$lidarrDownloadImportNotfication" == "true" ]; then
 			break
 		fi
-	done	
+	done
+	log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: Considered $deezerCandidatesConsidered candidates; fetched $deezerDetailsFetched detail records..."
 }
 
 FuzzyDeezerSearch () {
@@ -1630,12 +1643,26 @@ FuzzyDeezerSearch () {
 	resultsCount=$(echo "$deezerSearch" | jq -r .album.id | sort -u | wc -l)
 	log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $resultsCount search results found"
 	if [ ! -z "$deezerSearch" ]; then
+		deezerCandidatesConsidered=0
+		deezerDetailsFetched=0
 		for deezerAlbumID in $(echo "$deezerSearch" | jq -r .album.id | sort -u); do
+			deezerCandidatesConsidered=$((deezerCandidatesConsidered + 1))
 			deezerAlbumData="$(echo "$deezerSearch" | jq -r ".album | select(.id==$deezerAlbumID)")"
 			deezerAlbumTitle="$(echo "$deezerAlbumData" | jq -r ".title")"
 			deezerAlbumTitle="$(echo "$deezerAlbumTitle" | head -n1)"
 			deezerAlbumTitleClean="$(echo "$deezerAlbumTitle" | sed -e "s%[^[:alpha:][:digit:]]%%g" -e "s/  */ /g" | sed 's/^[.]*//' | sed  's/[.]*$//g' | sed  's/^ *//g' | sed 's/ *$//g')"
 			deezerAlbumTitleClean="${deezerAlbumTitleClean:0:130}"
+			if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
+				continue
+			fi
+			if [ "$diff" -gt "$matchDistance" ]; then
+				continue
+			fi
+			if [ "$deezerDetailsFetched" -ge "$deezerDetailLookupLimit" ]; then
+				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: Detail lookup limit reached ($deezerDetailLookupLimit); stopping candidate expansion..."
+				break
+			fi
+			deezerDetailsFetched=$((deezerDetailsFetched + 1))
 
 			if ! GetDeezerAlbumInfo "$deezerAlbumID"; then
 				continue
@@ -1660,25 +1687,16 @@ FuzzyDeezerSearch () {
 				continue
 			fi
 
-			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Checking for Match..."
-			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Calculating Damerau-Levenshtein distance..."
-			if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
-				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
-				continue
-			fi
-			if [ "$diff" -le "$matchDistance" ]; then
-				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
-				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: Downloading $deezerAlbumTrackCount Tracks :: $deezerAlbumTitle ($downloadedReleaseYear)"
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: Downloading $deezerAlbumTrackCount Tracks :: $deezerAlbumTitle ($downloadedReleaseYear)"
 				
-				DownloadProcess "$deezerAlbumID" "DEEZER" "$downloadedReleaseYear" "$deezerAlbumTitle" "$deezerAlbumTrackCount"
-			else
-				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer  Match Not Found :: Calculated Difference ($diff) greater than $matchDistance"
-			fi
+			DownloadProcess "$deezerAlbumID" "DEEZER" "$downloadedReleaseYear" "$deezerAlbumTitle" "$deezerAlbumTrackCount"
 			# End search if lidarr was successfully notified for import
 			if [ "$lidarrDownloadImportNotfication" == "true" ]; then
 				break
 			fi
 		done
+		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: Considered $deezerCandidatesConsidered candidates; fetched $deezerDetailsFetched detail records..."
 		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: ERROR :: Results found, but none matching search criteria..."
 	else
 		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: ERROR :: No results found via Fuzzy Search..."
