@@ -38,6 +38,23 @@ This configuration does its best to update everything automatically, but with ho
 ## Support
 [Information](https://github.com/RandomNinjaAtk/arr-scripts/tree/main?tab=readme-ov-file#support-info)
 
+## Troubleshooting
+
+### Prowlarr indexer TLS failures
+
+An HTTP 500 from a Lidarr indexer URL such as `http://prowlarr:9696/<id>/api` does not necessarily mean Lidarr cannot reach Prowlarr. Check the response body. Messages such as `The SSL connection could not be established` or `The remote certificate was rejected` mean Prowlarr reached the upstream indexer but rejected its certificate.
+
+Open Prowlarr, locate the indexer matching the numeric `<id>` in the proxy URL, and test it there. Correct the indexer URL or certificate problem, or disable that indexer. Do not publish the `apikey` query value when sharing logs.
+
+### Spotify import-list failures
+
+Spotify import-list failures have two common causes:
+
+* A timeout while contacting `spotify.lidarr.audio` indicates that the renewal service or network path did not respond. Retry later and verify DNS, proxy, and firewall access.
+* HTTP 400 with `Invalid token` means the stored refresh token is invalid or revoked. Reauthenticate the Spotify import list, or disable it until authentication is restored.
+
+Saved Albums, Followed Artists, and Playlist imports may each repeat the same underlying authentication error. Diagnose the first renewal response rather than treating every import-list error as a separate failure. Keep refresh tokens and renewal URLs containing tokens out of logs and issue reports. An `Invalid token` response alone does not establish that the Spotify account tier is the cause.
+
 
 ## Features
 
