@@ -170,7 +170,10 @@ class LidarrExtendedAPI:
             file.close()
             exit(1)
         self.currentARLToken = arl_token_match[0]
-        self.log.info('ARL Found in extended.conf')
+        if self.currentARLToken == '""':
+            self.log.info('ARL setting found but is empty')
+        else:
+            self.log.info('ARL setting found and contains a value')
 
         for line in self.fileText:
             if 'telegramBotEnable=' in line:
@@ -225,7 +228,6 @@ class LidarrExtendedAPI:
     def check_token_wrapper(self):  # adds Lidarr_extended specific logging and actions around check_token
         self.log.info("Checking ARL Token from extended.conf")
         if self.currentARLToken == '""':
-            self.log.info(Fore.YELLOW+"No ARL Token set in Extended.conf"+Fore.RESET)
             self.report_status("NOT SET")
             exit(0)
         if self.currentARLToken is None:
