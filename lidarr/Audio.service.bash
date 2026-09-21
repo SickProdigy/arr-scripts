@@ -1434,6 +1434,20 @@ GetDeezerAlbumInfo () {
 
 }
 
+CalculateTitleDistance () {
+	local distance
+
+	if ! distance=$(python3 -c 'import sys; from pyxdameraulevenshtein import damerau_levenshtein_distance; print(damerau_levenshtein_distance(sys.argv[1], sys.argv[2]))' "${1,,}" "${2,,}" 2>/dev/null); then
+		return 1
+	fi
+
+	case "$distance" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+
+	printf '%s\n' "$distance"
+}
+
 ArtistDeezerSearch () {
 	# Required Inputs
 	# $1 Process ID
@@ -1491,7 +1505,10 @@ ArtistDeezerSearch () {
 		
 		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Checking for Match..."
 		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Calculating Damerau-Levenshtein distance..."
-		diff=$(python3 -c "from pyxdameraulevenshtein import damerau_levenshtein_distance; print(damerau_levenshtein_distance(\"${lidarrAlbumReleaseTitleClean,,}\", \"${deezerAlbumTitleClean,,}\"))" 2>/dev/null)
+		if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
+			continue
+		fi
 		if [ "$diff" -le "$matchDistance" ]; then
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
 
@@ -1568,7 +1585,10 @@ FuzzyDeezerSearch () {
 
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Checking for Match..."
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Calculating Damerau-Levenshtein distance..."
-			diff=$(python3 -c "from pyxdameraulevenshtein import damerau_levenshtein_distance; print(damerau_levenshtein_distance(\"${lidarrAlbumReleaseTitleClean,,}\", \"${deezerAlbumTitleClean,,}\"))" 2>/dev/null)
+			if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
+				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
+				continue
+			fi
 			if [ "$diff" -le "$matchDistance" ]; then
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: Downloading $deezerAlbumTrackCount Tracks :: $deezerAlbumTitle ($downloadedReleaseYear)"
@@ -1640,7 +1660,10 @@ ArtistTidalSearch () {
 
 		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Checking for Match..."
 		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Calculating Damerau-Levenshtein distance..."
-		diff=$(python3 -c "from pyxdameraulevenshtein import damerau_levenshtein_distance; print(damerau_levenshtein_distance(\"${lidarrAlbumReleaseTitleClean,,}\", \"${tidalAlbumTitleClean,,}\"))" 2>/dev/null)
+		if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$tidalAlbumTitleClean"); then
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
+			continue
+		fi
 		if [ "$diff" -le "$matchDistance" ]; then
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal MATCH Found :: Calculated Difference = $diff"
 
@@ -1698,7 +1721,10 @@ FuzzyTidalSearch () {
 
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Checking for Match..."
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Calculating Damerau-Levenshtein distance..."
-			diff=$(python3 -c "from pyxdameraulevenshtein import damerau_levenshtein_distance; print(damerau_levenshtein_distance(\"${lidarrAlbumReleaseTitleClean,,}\", \"${tidalAlbumTitleClean,,}\"))" 2>/dev/null)
+			if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$tidalAlbumTitleClean"); then
+				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
+				continue
+			fi
 			if [ "$diff" -le "$matchDistance" ]; then
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal MATCH Found :: Calculated Difference = $diff"
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: Downloading $downloadedTrackCount Tracks :: $tidalAlbumTitle ($downloadedReleaseYear)"
