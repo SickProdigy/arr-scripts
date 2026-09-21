@@ -488,6 +488,18 @@ DownloadProcess () {
 	# $3 = Album Year that matches Album ID Metadata
 	# $4 = Album Title that matches Album ID Metadata
 	# $5 = Expected Track Count
+	case "$2" in
+		DEEZER)
+			releaseGroup="Deezer"
+			;;
+		TIDAL)
+			releaseGroup="Tidal"
+			;;
+		*)
+			log "ERROR :: Unsupported download client type for release-group tagging: $2"
+			return 1
+			;;
+	esac
 
 	# Create Required Directories	
 	if [ ! -d "$audioPath/incomplete" ]; then
@@ -799,7 +811,8 @@ DownloadProcess () {
 	fi
 	
 	albumquality="$(find "$audioPath"/incomplete/ -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | head -n 1 | egrep -i -E -o "\.{1}\w*$" | sed  's/\.//g')"
-	downloadedAlbumFolder="${lidarrArtistNameSanitized}-${downloadedAlbumTitleClean:0:100} (${3})"
+	# Lidarr parses a trailing bracketed value from the download title as ReleaseGroup.
+	downloadedAlbumFolder="${lidarrArtistNameSanitized}-${downloadedAlbumTitleClean:0:100} (${3}) [${releaseGroup}]"
 
 	find "$audioPath/incomplete" -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" -print0 | while IFS= read -r -d '' audio; do
         file="${audio}"
