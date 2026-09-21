@@ -7,13 +7,33 @@ source /config/extended.conf
 #### Import Functions
 source /config/extended/functions
 
+networkConnectTimeout="${networkConnectTimeout:-10}"
+networkMaxTime="${networkMaxTime:-60}"
+networkRetryCount="${networkRetryCount:-2}"
+lidarrTaskWaitTimeout="${lidarrTaskWaitTimeout:-300}"
+
+CurlRequestOnce () {
+	curl --silent --show-error --fail \
+		--connect-timeout "$networkConnectTimeout" \
+		--max-time "$networkMaxTime" \
+		"$@"
+}
+
+CurlRequest () {
+	CurlRequestOnce \
+		--retry "$networkRetryCount" \
+		--retry-delay 1 \
+		--retry-all-errors \
+		"$@"
+}
+
 AddTag () {
   log "adding arr-extended tag"
-  lidarrProcessIt=$(curl -s  "$arrUrl/api/v1/tag" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json" --data-raw '{"label":"arr-extended"}')
+  lidarrProcessIt=$(CurlRequestOnce "$arrUrl/api/v1/tag" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json" --data-raw '{"label":"arr-extended"}')
 }
 
 AddDownloadClient () {
-  downloadClientsData=$(curl -s  "$arrUrl/api/v1/downloadclient" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json")
+  downloadClientsData=$(CurlRequest "$arrUrl/api/v1/downloadclient" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json")
   downloadClientCheck="$(echo $downloadClientsData | grep "Arr-Extended")"
   if [ -z "$downloadClientCheck" ]; then
     AddTag
@@ -22,7 +42,7 @@ AddDownloadClient () {
       chmod 777 -R "$importPath"
     fi
 	log "Adding download Client"
-    lidarrProcessIt=$(curl -s "$arrUrl/api/v1/downloadclient" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json" --data-raw "{\"enable\":true,\"protocol\":\"usenet\",\"priority\":10,\"removeCompletedDownloads\":true,\"removeFailedDownloads\":true,\"name\":\"Arr-Extended\",\"fields\":[{\"name\":\"nzbFolder\",\"value\":\"$importPath\"},{\"name\":\"watchFolder\",\"value\":\"$importPath\"}],\"implementationName\":\"Usenet Blackhole\",\"implementation\":\"UsenetBlackhole\",\"configContract\":\"UsenetBlackholeSettings\",\"infoLink\":\"https://wiki.servarr.com/lidarr/supported#usenetblackhole\",\"tags\":[]}")
+    lidarrProcessIt=$(CurlRequestOnce "$arrUrl/api/v1/downloadclient" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json" --data-raw "{\"enable\":true,\"protocol\":\"usenet\",\"priority\":10,\"removeCompletedDownloads\":true,\"removeFailedDownloads\":true,\"name\":\"Arr-Extended\",\"fields\":[{\"name\":\"nzbFolder\",\"value\":\"$importPath\"},{\"name\":\"watchFolder\",\"value\":\"$importPath\"}],\"implementationName\":\"Usenet Blackhole\",\"implementation\":\"UsenetBlackhole\",\"configContract\":\"UsenetBlackholeSettings\",\"infoLink\":\"https://wiki.servarr.com/lidarr/supported#usenetblackhole\",\"tags\":[]}")
  fi
 }
 
@@ -905,7 +925,7 @@ AddReplaygainTags () {
 }
 
 NotifyLidarrForImport () {
-	LidarrProcessIt=$(curl -s "$arrUrl/api/v1/command" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json" --data "{\"name\":\"DownloadedAlbumsScan\", \"path\":\"$1\"}")
+	LidarrProcessIt=$(CurlRequestOnce "$arrUrl/api/v1/command" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json" --data "{\"name\":\"DownloadedAlbumsScan\", \"path\":\"$1\"}")
 	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: LIDARR IMPORT NOTIFICATION SENT! :: $1"
 }
 
@@ -982,7 +1002,7 @@ DeezerClientTest () {
 }
 
 LidarrRootFolderCheck () {
-	if curl -s "$arrUrl/api/v1/rootFolder" -H "X-Api-Key: ${arrApiKey}" | sed '1q' | grep "\[\]" | read; then
+	if CurlRequest "$arrUrl/api/v1/rootFolder" -H "X-Api-Key: ${arrApiKey}" | sed '1q' | grep "\[\]" | read; then
 		log "ERROR :: No root folder found"
 		log "ERROR :: Configure root folder in Lidarr to continue..."
 		log "ERROR :: Exiting..."
@@ -1021,7 +1041,7 @@ GetMissingCutOffList () {
 		searchDirection="ascending"
 	fi
 
-	lidarrMissingTotalRecords=$(wget --timeout=0 -q -O - "$arrUrl/api/v1/wanted/missing?page=1&pagesize=1&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r .totalRecords)
+	lidarrMissingTotalRecords=$(CurlRequest "$arrUrl/api/v1/wanted/missing?page=1&pagesize=1&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r .totalRecords)
 
 	log "FINDING MISSING ALBUMS :: sorted by $searchSort"
 
@@ -1039,7 +1059,7 @@ GetMissingCutOffList () {
 				dlnumber="$lidarrMissingTotalRecords"
 			fi
 			log "$page :: missing :: Downloading page $page... ($offset - $dlnumber of $lidarrMissingTotalRecords Results)"
-      wget --timeout=0 -q -O - "$arrUrl/api/v1/wanted/missing?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id' | sort > /config/extended/cache/tocheck.txt
+      CurlRequest "$arrUrl/api/v1/wanted/missing?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id' | sort > /config/extended/cache/tocheck.txt
 			log "$page :: missing :: Filtering Album IDs by removing previously searched Album IDs (/config/extended/logs/notfound/<files>)"
       ls /config/extended/logs/notfound/ | sed "s/--.*//" > /config/extended/cache/notfound.txt
 
@@ -1064,7 +1084,7 @@ GetMissingCutOffList () {
 	
 
 	# Get cutoff album list
-	lidarrCutoffTotalRecords=$(wget --timeout=0 -q -O - "$arrUrl/api/v1/wanted/cutoff?page=1&pagesize=1&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r .totalRecords)
+	lidarrCutoffTotalRecords=$(CurlRequest "$arrUrl/api/v1/wanted/cutoff?page=1&pagesize=1&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r .totalRecords)
 	log "FINDING CUTOFF ALBUMS sorted by $searchSort"
 	log "$lidarrCutoffTotalRecords CutOff Albums Found Found!"
 	log "Getting CutOff Album IDs"
@@ -1081,7 +1101,7 @@ GetMissingCutOffList () {
 
 			log "$page :: cutoff :: Downloading page $page... ($offset - $dlnumber of $lidarrCutoffTotalRecords Results)"
 			# lidarrRecords=$(wget --timeout=0 -q -O - "$arrUrl/api/v1/wanted/cutoff?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id')
-      wget --timeout=0 -q -O - "$arrUrl/api/v1/wanted/cutoff?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id' | sort > /config/extended/cache/tocheck.txt
+      CurlRequest "$arrUrl/api/v1/wanted/cutoff?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id' | sort > /config/extended/cache/tocheck.txt
 
 			log "$page :: cutoff :: Filtering Album IDs by removing previously searched Album IDs (/config/extended/logs/notfound/<files>)"
 			ls /config/extended/logs/notfound/ | sed "s/--.*//" > /config/extended/cache/notfound.txt
@@ -1120,7 +1140,7 @@ SearchProcess () {
 		wantedAlbumId=$(echo $lidarrMissingId | sed -e "s%[^[:digit:]]%%g")
 		checkLidarrAlbumId=$wantedAlbumId
 		wantedAlbumListSource=$(echo $lidarrMissingId | sed -e "s%[^[:alpha:]]%%g")
-		lidarrAlbumData="$(curl -s "$arrUrl/api/v1/album/$wantedAlbumId?apikey=${arrApiKey}")"
+		lidarrAlbumData="$(CurlRequest "$arrUrl/api/v1/album/$wantedAlbumId?apikey=${arrApiKey}")"
 		lidarrArtistData=$(echo "${lidarrAlbumData}" | jq -r ".artist")
 		lidarrArtistName=$(echo "${lidarrArtistData}" | jq -r ".artistName")
 		lidarrArtistForeignArtistId=$(echo "${lidarrArtistData}" | jq -r ".foreignArtistId")
@@ -1407,31 +1427,33 @@ SearchProcess () {
 }
 
 GetDeezerAlbumInfo () {
-	until false
-	do
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: Getting Album info..."
-		if [ ! -f "/config/extended/cache/deezer/$1.json" ]; then
-			curl -s "https://api.deezer.com/album/$1" -o "/config/extended/cache/deezer/$1.json"
-			sleep $sleepTimer
+	local albumId="$1"
+	local cacheFile="/config/extended/cache/deezer/$albumId.json"
+	local tempFile="${cacheFile}.tmp.$$"
+	local attempt
+	local maxAttempts=$((networkRetryCount + 1))
+
+	if jq -e '.id and .title and (.nb_tracks | numbers)' "$cacheFile" >/dev/null 2>&1; then
+		albumInfoVerified=true
+		return 0
+	fi
+
+	rm -f "$cacheFile" "$tempFile"
+	for ((attempt=1; attempt<=maxAttempts; attempt++)); do
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: Getting Deezer album $albumId info (attempt $attempt/$maxAttempts)..."
+		if CurlRequestOnce "https://api.deezer.com/album/$albumId" -o "$tempFile" \
+			&& jq -e '.id and .title and (.nb_tracks | numbers)' "$tempFile" >/dev/null 2>&1; then
+			mv "$tempFile" "$cacheFile"
+			chmod 777 "$cacheFile"
+			albumInfoVerified=true
+			return 0
 		fi
-		if [ -f "/config/extended/cache/deezer/$1.json" ]; then
-			if jq -e . >/dev/null 2>&1 <<<"$(cat /config/extended/cache/deezer/$1.json)"; then
-				log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: Album info downloaded and verified..."
-				chmod 777 /config/extended/cache/deezer/$1.json
-				albumInfoVerified=true
-				break
-			else
-				log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: Error getting album information"
-				if [ -f "/config/extended/cache/deezer/$1.json" ]; then
-					rm "/config/extended/cache/deezer/$1.json"
-				fi
-				log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: Retrying..."
-			fi
-		else
-			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: ERROR :: Download Failed"
-		fi
+
+		rm -f "$tempFile"
 	done
 
+	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: ERROR :: Unable to get valid Deezer album $albumId info after $maxAttempts attempts; skipping candidate..."
+	return 1
 }
 
 CalculateTitleDistance () {
@@ -1459,7 +1481,7 @@ ArtistDeezerSearch () {
 		mkdir -p /config/extended/cache/deezer
 	fi
 	if [ ! -f "/config/extended/cache/deezer/$2-albums.json" ]; then
-		getDeezerArtistAlbums=$(curl -s "https://api.deezer.com/artist/$2/albums?limit=1000" > "/config/extended/cache/deezer/$2-albums.json")
+		getDeezerArtistAlbums=$(CurlRequest "https://api.deezer.com/artist/$2/albums?limit=1000" > "/config/extended/cache/deezer/$2-albums.json")
 		sleep $sleepTimer
 		getDeezerArtistAlbumsCount="$(cat "/config/extended/cache/deezer/$2-albums.json" | jq -r .total)"
 	fi
@@ -1486,7 +1508,9 @@ ArtistDeezerSearch () {
 		deezerAlbumTitle="$(echo "$deezerAlbumData" | jq -r ".title")"
 		deezerAlbumTitleClean="$(echo ${deezerAlbumTitle} | sed -e "s%[^[:alpha:][:digit:]]%%g" -e "s/  */ /g" | sed 's/^[.]*//' | sed  's/[.]*$//g' | sed  's/^ *//g' | sed 's/ *$//g')"
   		deezerAlbumTitleClean="${deezerAlbumTitleClean:0:130}"		
-		GetDeezerAlbumInfo "$deezerAlbumID"
+		if ! GetDeezerAlbumInfo "$deezerAlbumID"; then
+			continue
+		fi
 		deezerAlbumData="$(cat "/config/extended/cache/deezer/$deezerAlbumID.json")"
 		deezerAlbumTrackCount="$(echo "$deezerAlbumData" | jq -r .nb_tracks)"
 		deezerAlbumExplicitLyrics="$(echo "$deezerAlbumData" | jq -r .explicit_lyrics)"								
@@ -1547,10 +1571,10 @@ FuzzyDeezerSearch () {
 	deezerSearch=""
 	if [ "$lidarrArtistForeignArtistId" == "89ad4ac3-39f7-470e-963a-56509c546377" ]; then
 		# Search without Artist for VA albums
-		deezerSearch=$(curl -s "https://api.deezer.com/search?q=album:%22${albumTitleSearch}%22&strict=on&limit=20" | jq -r ".data[]")
+		deezerSearch=$(CurlRequest "https://api.deezer.com/search?q=album:%22${albumTitleSearch}%22&strict=on&limit=20" | jq -r ".data[]")
 	else
 		# Search with Artist for non VA albums
-		deezerSearch=$(curl -s "https://api.deezer.com/search?q=artist:%22${albumArtistNameSearch}%22%20album:%22${albumTitleSearch}%22&strict=on&limit=20" | jq -r ".data[]")
+		deezerSearch=$(CurlRequest "https://api.deezer.com/search?q=artist:%22${albumArtistNameSearch}%22%20album:%22${albumTitleSearch}%22&strict=on&limit=20" | jq -r ".data[]")
 	fi
 	resultsCount=$(echo "$deezerSearch" | jq -r .album.id | sort -u | wc -l)
 	log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $resultsCount search results found"
@@ -1562,7 +1586,9 @@ FuzzyDeezerSearch () {
 			deezerAlbumTitleClean="$(echo "$deezerAlbumTitle" | sed -e "s%[^[:alpha:][:digit:]]%%g" -e "s/  */ /g" | sed 's/^[.]*//' | sed  's/[.]*$//g' | sed  's/^ *//g' | sed 's/ *$//g')"
 			deezerAlbumTitleClean="${deezerAlbumTitleClean:0:130}"
 
-			GetDeezerAlbumInfo "${deezerAlbumID}"
+			if ! GetDeezerAlbumInfo "$deezerAlbumID"; then
+				continue
+			fi
 			deezerAlbumData="$(cat "/config/extended/cache/deezer/$deezerAlbumID.json")"
 			deezerAlbumTrackCount="$(echo "$deezerAlbumData" | jq -r .nb_tracks)"
 			deezerAlbumExplicitLyrics="$(echo "$deezerAlbumData" | jq -r .explicit_lyrics)"								
@@ -1617,7 +1643,7 @@ ArtistTidalSearch () {
 
 	# Get tidal artist album list
 	if [ ! -f /config/extended/cache/tidal/$2-albums.json ]; then
-		curl -s "https://api.tidal.com/v1/artists/$2/albums?limit=10000&countryCode=$tidalCountryCode&filter=ALL" -H 'x-tidal-token: CzET4vdadNUFQ5JU' > /config/extended/cache/tidal/$2-albums.json
+		CurlRequest "https://api.tidal.com/v1/artists/$2/albums?limit=10000&countryCode=$tidalCountryCode&filter=ALL" -H 'x-tidal-token: CzET4vdadNUFQ5JU' > /config/extended/cache/tidal/$2-albums.json
 		sleep $sleepTimer
 	fi
 
@@ -1697,10 +1723,10 @@ FuzzyTidalSearch () {
 	
 	if [ "$lidarrArtistForeignArtistId" == "89ad4ac3-39f7-470e-963a-56509c546377" ]; then
 		# Search without Artist for VA albums
-		tidalSearch=$(curl -s "https://api.tidal.com/v1/search/albums?query=${albumTitleSearch}&countryCode=${tidalCountryCode}&limit=20" -H 'x-tidal-token: CzET4vdadNUFQ5JU' | jq -r ".items | sort_by(.numberOfTracks) | sort_by(.explicit) | reverse |.[] | select(.explicit=="$2") | select((.numberOfTracks <= $lidarrAlbumReleasesMaxTrackCount) and .numberOfTracks >= $lidarrAlbumReleasesMinTrackCount)")
+		tidalSearch=$(CurlRequest "https://api.tidal.com/v1/search/albums?query=${albumTitleSearch}&countryCode=${tidalCountryCode}&limit=20" -H 'x-tidal-token: CzET4vdadNUFQ5JU' | jq -r ".items | sort_by(.numberOfTracks) | sort_by(.explicit) | reverse |.[] | select(.explicit=="$2") | select((.numberOfTracks <= $lidarrAlbumReleasesMaxTrackCount) and .numberOfTracks >= $lidarrAlbumReleasesMinTrackCount)")
 	else
 		# Search with Artist for non VA albums
-		tidalSearch=$(curl -s "https://api.tidal.com/v1/search/albums?query=${albumArtistNameSearch}%20${albumTitleSearch}&countryCode=${tidalCountryCode}&limit=20" -H 'x-tidal-token: CzET4vdadNUFQ5JU' | jq -r ".items | sort_by(.numberOfTracks) | sort_by(.explicit) | reverse |.[]| select(.explicit=="$2") | select((.numberOfTracks <= $lidarrAlbumReleasesMaxTrackCount) and .numberOfTracks >= $lidarrAlbumReleasesMinTrackCount)")
+		tidalSearch=$(CurlRequest "https://api.tidal.com/v1/search/albums?query=${albumArtistNameSearch}%20${albumTitleSearch}&countryCode=${tidalCountryCode}&limit=20" -H 'x-tidal-token: CzET4vdadNUFQ5JU' | jq -r ".items | sort_by(.numberOfTracks) | sort_by(.explicit) | reverse |.[]| select(.explicit=="$2") | select((.numberOfTracks <= $lidarrAlbumReleasesMaxTrackCount) and .numberOfTracks >= $lidarrAlbumReleasesMinTrackCount)")
 	fi
 	sleep $sleepTimer
 	tidalSearch=$(echo "$tidalSearch" | jq -r )
@@ -1746,20 +1772,41 @@ FuzzyTidalSearch () {
 }
 
 LidarrTaskStatusCheck () {
-	alerted=no
-	until false
-	do
-		taskCount=$(curl -s "$arrUrl/api/v1/command?apikey=${arrApiKey}" | jq -r '.[] | select(.status=="started") | .name' | wc -l)
+	local alerted=no
+	local elapsed=0
+	local taskData
+	local taskCount
+
+	while [ "$elapsed" -lt "$lidarrTaskWaitTimeout" ]; do
+		if ! taskData=$(CurlRequest "$arrUrl/api/v1/command?apikey=${arrApiKey}"); then
+			log "STATUS :: LIDARR :: ERROR :: Unable to query active tasks; retrying..."
+			sleep 2
+			elapsed=$((elapsed + 2))
+			continue
+		fi
+
+		taskCount=$(jq '[.[] | select(.status=="started") | select(.commandName != "Process Monitored Downloads")] | length' <<<"$taskData" 2>/dev/null)
+		if [[ ! "$taskCount" =~ ^[0-9]+$ ]]; then
+			log "STATUS :: LIDARR :: ERROR :: Invalid task response; retrying..."
+			sleep 2
+			elapsed=$((elapsed + 2))
+			continue
+		fi
+
 		if [ "$taskCount" -ge "1" ]; then
 			if [ "$alerted" == "no" ]; then
 				alerted=yes
 				log "STATUS :: LIDARR BUSY :: Pausing/waiting for all active Lidarr tasks to end..."
 			fi
 			sleep 2
+			elapsed=$((elapsed + 2))
 		else
-			break
+			return 0
 		fi
 	done
+
+	log "STATUS :: LIDARR :: ERROR :: Timed out after ${lidarrTaskWaitTimeout}s waiting for active tasks; continuing..."
+	return 1
 }
 
 LidarrMissingAlbumSearch () {
@@ -1780,7 +1827,7 @@ LidarrMissingAlbumSearch () {
 			fi
 		fi
 		log "$processCount of $lidarrArtistIdsCount :: Notified Lidarr to search for \"$lidarrArtistName\""
-		startLidarrArtistSearch=$(curl -s "$arrUrl/api/v1/command" -X POST -H "Content-Type: application/json" -H "X-Api-Key: $arrApiKey"  --data-raw "{\"name\":\"ArtistSearch\",\"artistId\":$lidarrArtistId}")
+		startLidarrArtistSearch=$(CurlRequestOnce "$arrUrl/api/v1/command" -X POST -H "Content-Type: application/json" -H "X-Api-Key: $arrApiKey"  --data-raw "{\"name\":\"ArtistSearch\",\"artistId\":$lidarrArtistId}")
 		if [ ! -d /config/extended/logs/searched/lidarr/artist ]; then
 			mkdir -p /config/extended/logs/searched/lidarr/artist
 			chmod -R 777 /config/extended/logs/searched/lidarr/artist
@@ -1801,7 +1848,7 @@ NotifyWebhook () {
 	if [ "$webHook" ]
 	then
 		content="$1: $2"
-		curl -s -X POST "{$webHook}" -H 'Content-Type: application/json' -d '{"event":"'"$1"'", "message":"'"$2"'", "content":"'"$content"'"}'
+		CurlRequestOnce -X POST "{$webHook}" -H 'Content-Type: application/json' -d '{"event":"'"$1"'", "message":"'"$2"'", "content":"'"$content"'"}'
 	fi
 }
 
@@ -1827,7 +1874,7 @@ AudioProcess () {
   LidarrTaskStatusCheck
   
   # Get artist list for LidarrMissingAlbumSearch process, to prevent searching for artists that will not be processed by the script
-  lidarrMissingAlbumArtistsData=$(wget --timeout=0 -q -O - "$arrUrl/api/v1/artist?apikey=$arrApiKey" | jq -r .[])
+  lidarrMissingAlbumArtistsData=$(CurlRequest "$arrUrl/api/v1/artist?apikey=$arrApiKey" | jq -r .[])
   
   if [ "$dlClientSource" == "deezer" ] || [ "$dlClientSource" == "tidal" ] || [ "$dlClientSource" == "both" ]; then
   	GetMissingCutOffList
