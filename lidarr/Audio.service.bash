@@ -27,6 +27,52 @@ CurlRequest () {
 		"$@"
 }
 
+FailedDownloadIsBlocked () {
+	local provider="$1"
+	local albumId="$2"
+	local marker="/config/extended/logs/downloaded/failed/$provider/$albumId"
+	local markerTime
+	local now
+	local cooldownSeconds
+	local remainingHours
+
+	[ -f "$marker" ] || return 1
+	if grep -qx 'permanent=true' "$marker" 2>/dev/null; then
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Permanently suppressed $provider download ($albumId); remove the marker to retry..."
+		return 0
+	fi
+
+	if [[ ! "$failedDownloadRetryDays" =~ ^[0-9]+$ ]]; then
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Invalid failedDownloadRetryDays value; using 7 days..."
+		failedDownloadRetryDays=7
+	fi
+
+	markerTime=$(stat -c %Y "$marker" 2>/dev/null) || markerTime=0
+	now=$(date +%s)
+	cooldownSeconds=$((failedDownloadRetryDays * 86400))
+	if [ "$markerTime" -gt 0 ] && [ $((now - markerTime)) -lt "$cooldownSeconds" ]; then
+		remainingHours=$(((cooldownSeconds - (now - markerTime) + 3599) / 3600))
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Previously failed $provider download ($albumId); retry eligible in approximately $remainingHours hours..."
+		return 0
+	fi
+
+	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Failed $provider download cooldown expired ($albumId); retrying..."
+	rm -f "$marker"
+	return 1
+}
+
+RecordFailedDownload () {
+	local provider="$1"
+	local albumId="$2"
+	local attempts="$3"
+	local reason="$4"
+	local marker="/config/extended/logs/downloaded/failed/$provider/$albumId"
+
+	printf 'timestamp=%s\nprovider=%s\nattempts=%s\nreason=%s\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$provider" "$attempts" "$reason" > "$marker"
+	chmod 666 "$marker"
+}
+
 AddTag () {
   log "adding arr-extended tag"
   lidarrProcessIt=$(CurlRequestOnce "$arrUrl/api/v1/tag" --header "X-Api-Key:"${arrApiKey} -H "Content-Type: application/json" --data-raw '{"label":"arr-extended"}')
@@ -69,6 +115,10 @@ verifyConfig () {
 
   if [ -z "$failedDownloadAttemptThreshold" ]; then
   	failedDownloadAttemptThreshold="6"
+  fi
+
+  if [ -z "$failedDownloadRetryDays" ]; then
+  	failedDownloadRetryDays="7"
   fi
 
   if [ -z "$tidalClientTestDownloadId" ]; then
@@ -211,6 +261,7 @@ Configuration () {
 	fi
 
  	log "Failed Download Attempt Threshold: $failedDownloadAttemptThreshold"
+	log "Failed Download Retry Cooldown: $failedDownloadRetryDays days"
 	
 }
 
@@ -495,8 +546,7 @@ DownloadProcess () {
 			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Previously Downloaded ($1)..."
 			return
 		fi
-		if [ -f /config/extended/logs/downloaded/failed/deezer/$1 ]; then
-			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Previously Attempted Download ($1)..."
+		if FailedDownloadIsBlocked "deezer" "$1"; then
 			return
 		fi
 	fi
@@ -507,8 +557,7 @@ DownloadProcess () {
 			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Previously Downloaded ($1)..."
 			return
 		fi
-		if [ -f /config/extended/logs/downloaded/failed/tidal/$1 ]; then
-			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Previously Attempted Download ($1)..."
+		if FailedDownloadIsBlocked "tidal" "$1"; then
 			return
 		fi
 	fi
@@ -648,10 +697,10 @@ DownloadProcess () {
 
 
 		if [ "$2" == "DEEZER" ]; then
-			touch /config/extended/logs/downloaded/failed/deezer/$1
+			RecordFailedDownload "deezer" "$1" "$downloadTry" "missing_tracks"
 		fi
 		if [ "$2" == "TIDAL" ]; then
-			touch /config/extended/logs/downloaded/failed/tidal/$1
+			RecordFailedDownload "tidal" "$1" "$downloadTry" "missing_tracks"
 		fi
 		return
 	fi
@@ -660,9 +709,11 @@ DownloadProcess () {
 	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Logging $1 as successfully downloaded..."
 	if [ "$2" == "DEEZER" ]; then
 		touch /config/extended/logs/downloaded/deezer/$1
+		rm -f "/config/extended/logs/downloaded/failed/deezer/$1"
 	fi
 	if [ "$2" == "TIDAL" ]; then
 		touch /config/extended/logs/downloaded/tidal/$1
+		rm -f "/config/extended/logs/downloaded/failed/tidal/$1"
 	fi
 
 	# Tag with beets
