@@ -11,7 +11,7 @@ Container: <https://docs.linuxserver.io/images/docker-lidarr>
    Docker Run Example:<br>
    `-v /path/to/preferred/local/folder-01:/custom-services.d`<br>
    `-v /path/to/preferred/local/folder-02:/custom-cont-init.d`
-2. Download the [scripts_init.bash](https://github.com/RandomNinjaAtk/arr-scripts/blob/main/lidarr/scripts_init.bash) ([Download Link](https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/scripts_init.bash)) and place it into the following folder:
+2. Download [scripts_init.bash](https://gitea.rcs1.top/sickprodigy/arr-scripts/src/branch/main/lidarr/scripts_init.bash) ([raw file](https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/scripts_init.bash)) and place it into the following folder:
    `/custom-cont-init.d`
 3. Start your container and wait for the application to load
 4. Optional: Customize the configuration by modifying the following file `/config/extended.conf`
@@ -21,7 +21,7 @@ Container: <https://docs.linuxserver.io/images/docker-lidarr>
 
 Updating is a bit more cumbersome. To update, do the following:
 
-1. Download/update your local `/config/extended.conf` file with the latest options from: [extended.conf](https://github.com/RandomNinjaAtk/arr-scripts/blob/main/lidarr/extended.conf)
+1. Download/update your local `/config/extended.conf` file with the latest options from: [extended.conf](https://gitea.rcs1.top/sickprodigy/arr-scripts/src/branch/main/lidarr/extended.conf)
 2. Restart the container, wait for it to fully load the application.
 3. Restart the container again, for the new scripts to activate.
 
@@ -36,7 +36,7 @@ This configuration does its best to update everything automatically, but with ho
 1. Remove any Arr app customizations manually.
 
 ## Support
-[Information](https://github.com/RandomNinjaAtk/arr-scripts/tree/main?tab=readme-ov-file#support-info)
+[Issues](https://gitea.rcs1.top/sickprodigy/arr-scripts/issues)
 
 ## Troubleshooting
 
@@ -113,7 +113,7 @@ Saved Albums, Followed Artists, and Playlist imports may each repeat the same un
   * Optional Telegram bot with ability to set token from the chat
   * Optional Pushover and ntfy notification upon ARL token expiration
 
-For more details, visit the [Wiki](https://github.com/RandomNinjaAtk/arr-scripts/wiki/Lidarr)
+For source and updates, visit the [repository](https://gitea.rcs1.top/sickprodigy/arr-scripts).
 
 ### Audio & Video (Plex Example)
 

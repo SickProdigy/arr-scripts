@@ -40,7 +40,7 @@ verifyConfig () {
 
 	if [ -z "$videoPath" ]; then
 		log "ERROR: videoPath is not configured via the \"/config/extended.conf\" config file..."
-		log "Updated your \"/config/extended.conf\" file with the latest options, see: https://github.com/RandomNinjaAtk/arr-scripts/blob/main/lidarr/extended.conf"
+		log "Updated your \"/config/extended.conf\" file with the latest options, see: https://gitea.rcs1.top/sickprodigy/arr-scripts/src/branch/main/lidarr/extended.conf"
 		log "Sleeping (infinity)"
 		sleep infinity
 	fi
@@ -58,8 +58,8 @@ Configuration () {
 	log " May the beats be with you!"
 	log "-----------------------------------------------------------------------------"
 	log "Donate: https://github.com/sponsors/RandomNinjaAtk"
-	log "Project: https://github.com/RandomNinjaAtk/arr-scripts"
-	log "Support: https://github.com/RandomNinjaAtk/arr-scripts/discussions"
+	log "Project: https://gitea.rcs1.top/sickprodigy/arr-scripts"
+	log "Support: https://gitea.rcs1.top/sickprodigy/arr-scripts/issues"
 	log "-----------------------------------------------------------------------------"
 	sleep 5
 	log ""

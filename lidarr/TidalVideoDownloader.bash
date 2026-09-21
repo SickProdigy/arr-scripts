@@ -30,7 +30,7 @@ verifyConfig () {
 	
 	if [ -z "$videoPath" ]; then
 		log "ERROR: videoPath is not configured via the \"/config/extended.conf\" config file..."
-	 	log "Updated your \"/config/extended.conf\" file with the latest options, see: https://github.com/RandomNinjaAtk/arr-scripts/blob/main/lidarr/extended.conf"
+		log "Updated your \"/config/extended.conf\" file with the latest options, see: https://gitea.rcs1.top/sickprodigy/arr-scripts/src/branch/main/lidarr/extended.conf"
 		log "Sleeping (infinity)"
 		sleep infinity
 	fi

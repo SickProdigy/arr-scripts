@@ -1,20 +1,21 @@
 #!/usr/bin/with-contenv bash
 scriptVersion="1.4.5"
 SMA_PATH="/usr/local/sma"
+installDependencies="true"
 
 if [ -f /config/setup_version.txt ]; then
   source /config/setup_version.txt
   if [ "$scriptVersion" == "$setupversion" ]; then
     if apk --no-cache list | grep installed | grep opus-tools | read; then
-      echo "Setup was previously completed, skipping..."
-      exit
+      echo "Dependencies were previously installed; refreshing scripts only..."
+      installDependencies="false"
     fi
   fi
 fi
-echo "setupversion=$scriptVersion" > /config/setup_version.txt
 
 set -euo pipefail
 
+if [ "$installDependencies" == "true" ]; then
 echo "*** install packages ***" && \
 apk add -U --upgrade --no-cache \
   tidyhtml \
@@ -68,59 +69,61 @@ chgrp users ${SMA_PATH}/config/sma.log && \
 chmod g+w ${SMA_PATH}/config/sma.log && \
 echo "************ install pip dependencies ************" && \
 uv pip install --system --break-system-packages -r ${SMA_PATH}/setup/requirements.txt
+echo "setupversion=$scriptVersion" > /config/setup_version.txt
+fi
 
 mkdir -p /custom-services.d/python /config/extended
 
 parallel ::: \
-  'echo "Download QueueCleaner service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/universal/services/QueueCleaner -o /custom-services.d/QueueCleaner && echo "Done"' \
-  'echo "Download AutoConfig service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/AutoConfig.service.bash -o /custom-services.d/AutoConfig && echo "Done"' \
-  'echo "Download Video service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/Video.service.bash -o /custom-services.d/Video && echo "Done"' \
-  'echo "Download Tidal Video Downloader service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/TidalVideoDownloader.bash -o /custom-services.d/TidalVideoDownloader && echo "Done"' \
-  'echo "Download Audio service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/Audio.service.bash -o /custom-services.d/Audio && echo "Done"' \
-  'echo "Download AutoArtistAdder service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/AutoArtistAdder.bash -o /custom-services.d/AutoArtistAdder && echo "Done"' \
-  'echo "Download UnmappedFilesCleaner service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/UnmappedFilesCleaner.bash -o /custom-services.d/UnmappedFilesCleaner && echo "Done"' \
-  'echo "Download ARLChecker service..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/python/ARLChecker.py -o /custom-services.d/python/ARLChecker.py && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/ARLChecker -o /custom-services.d/ARLChecker && echo "Done"' \
-  'echo "Download Script Functions..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/universal/functions.bash -o /config/extended/functions && echo "Done"' \
-  'echo "Download PlexNotify script..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/PlexNotify.bash -o /config/extended/PlexNotify.bash  && echo "Done"' \
-  'echo "Download SMA config..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/sma.ini -o /config/extended/sma.ini  && echo "Done"' \
-  'echo "Download LyricExtractor script..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/LyricExtractor.bash -o /config/extended/LyricExtractor.bash && echo "Done"' \
-  'echo "Download ArtworkExtractor script..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/ArtworkExtractor.bash -o /config/extended/ArtworkExtractor.bash && echo "Done"' \
-  'echo "Download Beets Tagger script..." && curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/BeetsTagger.bash -o /config/extended/BeetsTagger.bash && echo "Done"'
+  'echo "Download QueueCleaner service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/universal/services/QueueCleaner -o /custom-services.d/QueueCleaner && echo "Done"' \
+  'echo "Download AutoConfig service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/AutoConfig.service.bash -o /custom-services.d/AutoConfig && echo "Done"' \
+  'echo "Download Video service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/Video.service.bash -o /custom-services.d/Video && echo "Done"' \
+  'echo "Download Tidal Video Downloader service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/TidalVideoDownloader.bash -o /custom-services.d/TidalVideoDownloader && echo "Done"' \
+  'echo "Download Audio service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/Audio.service.bash -o /custom-services.d/Audio && echo "Done"' \
+  'echo "Download AutoArtistAdder service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/AutoArtistAdder.bash -o /custom-services.d/AutoArtistAdder && echo "Done"' \
+  'echo "Download UnmappedFilesCleaner service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/UnmappedFilesCleaner.bash -o /custom-services.d/UnmappedFilesCleaner && echo "Done"' \
+  'echo "Download ARLChecker service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/python/ARLChecker.py -o /custom-services.d/python/ARLChecker.py && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/ARLChecker -o /custom-services.d/ARLChecker && echo "Done"' \
+  'echo "Download Script Functions..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/universal/functions.bash -o /config/extended/functions && echo "Done"' \
+  'echo "Download PlexNotify script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/PlexNotify.bash -o /config/extended/PlexNotify.bash  && echo "Done"' \
+  'echo "Download SMA config..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/sma.ini -o /config/extended/sma.ini  && echo "Done"' \
+  'echo "Download LyricExtractor script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/LyricExtractor.bash -o /config/extended/LyricExtractor.bash && echo "Done"' \
+  'echo "Download ArtworkExtractor script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/ArtworkExtractor.bash -o /config/extended/ArtworkExtractor.bash && echo "Done"' \
+  'echo "Download Beets Tagger script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/BeetsTagger.bash -o /config/extended/BeetsTagger.bash && echo "Done"'
 
 
 if [ ! -f /config/extended/beets-config.yaml ]; then
 	echo "Download Beets config..."
-	curl -sfL "https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/beets-config.yaml" -o /config/extended/beets-config.yaml
+	curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/beets-config.yaml" -o /config/extended/beets-config.yaml
 	echo "Done"
 fi
 
 if [ ! -f /config/extended/beets-config-lidarr.yaml ]; then
 	echo "Download Beets lidarr config..."
-	curl -sfL "https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/beets-config-lidarr.yaml" -o /config/extended/beets-config-lidarr.yaml
+	curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/beets-config-lidarr.yaml" -o /config/extended/beets-config-lidarr.yaml
 	echo "Done"
 fi
 
 if [ ! -f /config/extended/deemix_config.json ]; then
   echo "Download Deemix config..."
-  curl -sfL "https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/deemix_config.json" -o /config/extended/deemix_config.json
+  curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/deemix_config.json" -o /config/extended/deemix_config.json
   echo "Done"
 fi
 
 if [ ! -f /config/extended/tidal-dl.json ]; then
   echo "Download Tidal config..."
-  curl -sfL "https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/tidal-dl.json" -o /config/extended/tidal-dl.json
+  curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/tidal-dl.json" -o /config/extended/tidal-dl.json
   echo "Done"
 fi
 
 if [ ! -f /config/extended/beets-genre-whitelist.txt ]; then
 	echo "Download beets-genre-whitelist.txt..."
-	curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/beets-genre-whitelist.txt -o /config/extended/beets-genre-whitelist.txt
+	curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/beets-genre-whitelist.txt -o /config/extended/beets-genre-whitelist.txt
 	echo "Done"
 fi
 
 if [ ! -f /config/extended.conf ]; then
 	echo "Download Extended config..."
-	curl -sfL https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/lidarr/extended.conf -o /config/extended.conf
+	curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/extended.conf -o /config/extended.conf
 	chmod 777 /config/extended.conf
 	echo "Done"
 fi
