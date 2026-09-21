@@ -80,12 +80,12 @@ embedart:
 lastgenre:
     auto: yes
     canonical: yes
-    count: 5
+    count: 7
     fallback: null
     force: yes
     min_weight: 10
     prefer_specific: no
-    source: album
+    source: track
     whitelist: /config/extended/beets-genre-whitelist.txt
     title_case: yes
 
