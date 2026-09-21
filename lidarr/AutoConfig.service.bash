@@ -36,7 +36,19 @@ fi
 
 if [ "$configureCustomScripts" == "true" ] || [ -z "$configureCustomScripts" ]; then
 	log "Configuring Lidarr Custom Scripts"
-	if curl -s "$arrUrl/api/v1/notification" -H "X-Api-Key: ${arrApiKey}" | jq -r .[].name | grep "PlexNotify.bash" | read; then
+	notificationData=$(curl -s "$arrUrl/api/v1/notification" -H "X-Api-Key: ${arrApiKey}")
+	plexNotificationId=$(echo "$notificationData" | jq -r '.[] | select(.name=="PlexNotify.bash") | .id' | head -n 1)
+	if [ "$enablePlexNotify" != "true" ] || [ -z "$plexUrl" ] || [ -z "$plexToken" ]; then
+		if [ "$enablePlexNotify" == "true" ]; then
+			log "PlexNotify.bash is enabled but plexUrl or plexToken is empty; skipping registration"
+		else
+			log "PlexNotify.bash is disabled"
+		fi
+		if [ -n "$plexNotificationId" ]; then
+			curl -s "$arrUrl/api/v1/notification/$plexNotificationId" -X DELETE -H "X-Api-Key: ${arrApiKey}" >/dev/null
+			log "Removed disabled or incomplete PlexNotify.bash custom script"
+		fi
+	elif [ -n "$plexNotificationId" ]; then
 		log "PlexNotify.bash Already added to Lidarr custom scripts"
 	else
 		log "Adding PlexNotify.bash to Lidarr custom scripts"

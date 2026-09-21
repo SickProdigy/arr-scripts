@@ -27,7 +27,7 @@ plexConnectionError () {
 	log "ERROR :: Cannot communicate with Plex"
 	log "ERROR :: Please check your plexUrl and plexToken"
 	log "ERROR :: Configured plexUrl \"$plexUrl\""
-	log "ERROR :: Configured plexToken \"$plexToken\""
+	log "ERROR :: Configured plexToken is $([ -n "$plexToken" ] && echo 'set' || echo 'empty')"
 	log "ERROR :: Exiting..."
 	exit
 }
