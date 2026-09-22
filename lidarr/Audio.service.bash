@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.48"
+scriptVersion="2.49"
 scriptName="Audio"
 
 ### Import Settings
@@ -260,11 +260,13 @@ Configuration () {
 	if [ $enableBeetsTagging = true ]; then
 		log "Beets Tagging Enabled"
 		log "Beets Matching Threshold ${beetsMatchPercentage}%"
-		beetsMatchPercentage=$(expr 100 - $beetsMatchPercentage )
-		if cat /config/extended/beets-config.yaml | grep "strong_rec_thresh: 0.04" | read; then
-			log "Configuring Beets Matching Threshold"
-			sed -i "s/strong_rec_thresh: 0.04/strong_rec_thresh: 0.${beetsMatchPercentage}/g" /config/extended/beets-config.yaml
-		fi
+		beetsMatchThreshold=$(awk "BEGIN { printf \"%.2f\", (100 - ${beetsMatchPercentage}) / 100 }")
+		log "Configuring Beets matching distance ${beetsMatchThreshold}"
+		for beetsConfig in /config/extended/beets-config.yaml /config/extended/beets-config-lidarr.yaml; do
+			if [ -f "$beetsConfig" ]; then
+				sed -Ei "s/^([[:space:]]*strong_rec_thresh:).*/\\1 ${beetsMatchThreshold}/" "$beetsConfig"
+			fi
+		done
 	else
 		log "Beets Tagging Disabled"
 	fi
@@ -711,6 +713,17 @@ DownloadProcess () {
 
 	downloadCount=$(find "$audioPath"/incomplete/ -type f -regex ".*/.*\.\(flac\|m4a\|mp3\)" | wc -l)
 	if [ "$downloadCount" -gt "0" ]; then
+		if ! ValidateDownloadedDuration "$audioPath/incomplete" "$lidarrExpectedDurationMs"; then
+			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Download duration validation failed; rejecting preview or incomplete audio..."
+			rm -rf "$audioPath"/incomplete/*
+			if [ "$2" == "DEEZER" ]; then
+				RecordFailedDownload "deezer" "$1" "$downloadTry" "invalid_duration"
+			else
+				RecordFailedDownload "tidal" "$1" "$downloadTry" "invalid_duration"
+			fi
+			return
+		fi
+
 		# Check download for required quality (checks based on file extension)
 		DownloadQualityCheck "$audioPath/incomplete" "$2"
 	fi
@@ -1292,6 +1305,7 @@ SearchProcess () {
 		lidarrAlbumReleaseIds=$(echo "$lidarrAlbumData" | jq -r ".releases | sort_by(.trackCount) | reverse | .[].id")
 		lidarrAlbumReleasesMinTrackCount=$(echo "$lidarrAlbumData" | jq -r ".releases[].trackCount" | sort -n | head -n1)
 		lidarrAlbumReleasesMaxTrackCount=$(echo "$lidarrAlbumData" | jq -r ".releases[].trackCount" | sort -n -r | head -n1)
+		lidarrExpectedDurationMs=$(CurlRequestOnce "$arrUrl/api/v1/track?albumId=$wantedAlbumId" --header "X-Api-Key:${arrApiKey}" | jq -r '[.[].duration // 0] | add // 0')
 		lidarrAlbumReleaseDate=$(echo "$lidarrAlbumData" | jq -r .releaseDate)
 		lidarrAlbumReleaseDate=${lidarrAlbumReleaseDate:0:10}
 		lidarrAlbumReleaseDateClean="$(echo $lidarrAlbumReleaseDate | sed -e "s%[^[:digit:]]%%g")"
@@ -1562,6 +1576,52 @@ CalculateTitleDistance () {
 	printf '%s\n' "$distance"
 }
 
+TitleDistanceIsAcceptable () {
+	local expected="$1"
+	local candidate="$2"
+	local distance="$3"
+	local shortestLength=${#expected}
+	local allowedDistance
+
+	if [ ${#candidate} -lt "$shortestLength" ]; then
+		shortestLength=${#candidate}
+	fi
+
+	# Permit roughly 15% variation, rounded up, without exceeding matchDistance.
+	allowedDistance=$(( (shortestLength * 15 + 99) / 100 ))
+	if [ "$allowedDistance" -gt "$matchDistance" ]; then
+		allowedDistance="$matchDistance"
+	fi
+
+	[ "$distance" -le "$allowedDistance" ]
+}
+
+ValidateDownloadedDuration () {
+	local folder="$1"
+	local expectedDurationMs="$2"
+	local downloadedDuration
+	local minimumDuration
+
+	case "$expectedDurationMs" in
+		''|null|*[!0-9]*) return 0 ;;
+	esac
+	if [ "$expectedDurationMs" -le 0 ]; then
+		return 0
+	fi
+
+	downloadedDuration=$(find "$folder" -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" -print0 |
+		while IFS= read -r -d '' file; do
+			ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$file" 2>/dev/null
+		done | awk '{ total += $1 } END { printf "%.0f", total * 1000 }')
+
+	case "$downloadedDuration" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	minimumDuration=$((expectedDurationMs / 2))
+	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Duration validation :: downloaded ${downloadedDuration}ms, expected ${expectedDurationMs}ms"
+	[ "$downloadedDuration" -ge "$minimumDuration" ]
+}
+
 ArtistDeezerSearch () {
 	# Required Inputs
 	# $1 Process ID
@@ -1606,7 +1666,7 @@ ArtistDeezerSearch () {
 		if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
 			continue
 		fi
-		if [ "$diff" -gt "$matchDistance" ]; then
+		if ! TitleDistanceIsAcceptable "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean" "$diff"; then
 			continue
 		fi
 		if [ "$deezerDetailsFetched" -ge "$deezerDetailLookupLimit" ]; then
@@ -1688,7 +1748,7 @@ FuzzyDeezerSearch () {
 			if ! diff=$(CalculateTitleDistance "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean"); then
 				continue
 			fi
-			if [ "$diff" -gt "$matchDistance" ]; then
+			if ! TitleDistanceIsAcceptable "$lidarrAlbumReleaseTitleClean" "$deezerAlbumTitleClean" "$diff"; then
 				continue
 			fi
 			if [ "$deezerDetailsFetched" -ge "$deezerDetailLookupLimit" ]; then
@@ -1792,7 +1852,7 @@ ArtistTidalSearch () {
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
 			continue
 		fi
-		if [ "$diff" -le "$matchDistance" ]; then
+		if TitleDistanceIsAcceptable "$lidarrAlbumReleaseTitleClean" "$tidalAlbumTitleClean" "$diff"; then
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal MATCH Found :: Calculated Difference = $diff"
 
 			# Execute Download
@@ -1804,7 +1864,7 @@ ArtistTidalSearch () {
 				break
 			fi
 		else
-			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal Match Not Found :: Calculated Difference ($diff) greater than $matchDistance"
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal Match Not Found :: Calculated Difference ($diff) outside scaled tolerance"
 		fi
 	done
 	
@@ -1853,14 +1913,14 @@ FuzzyTidalSearch () {
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: ERROR :: Unable to calculate title distance; skipping candidate..."
 				continue
 			fi
-			if [ "$diff" -le "$matchDistance" ]; then
+			if TitleDistanceIsAcceptable "$lidarrAlbumReleaseTitleClean" "$tidalAlbumTitleClean" "$diff"; then
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal MATCH Found :: Calculated Difference = $diff"
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: Downloading $downloadedTrackCount Tracks :: $tidalAlbumTitle ($downloadedReleaseYear)"
 				
 				DownloadProcess "$tidalAlbumID" "TIDAL" "$downloadedReleaseYear" "$tidalAlbumTitle" "$downloadedTrackCount"
 
 			else
-				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal Match Not Found :: Calculated Difference ($diff) greater than $matchDistance"
+				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal Match Not Found :: Calculated Difference ($diff) outside scaled tolerance"
 			fi
 			# End search if lidarr was successfully notified for import
 			if [ "$lidarrDownloadImportNotfication" == "true" ]; then

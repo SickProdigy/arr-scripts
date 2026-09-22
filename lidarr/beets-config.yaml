@@ -12,7 +12,7 @@ lyrics:
     keep_synced: yes
 
 match:
-    strong_rec_thresh: 0.04
+    strong_rec_thresh: 0.15
     medium_rec_thresh: 0.25 # 0.25
     rec_gap_thresh: 0.25 # 0.25
     max_rec:
