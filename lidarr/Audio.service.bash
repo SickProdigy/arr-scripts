@@ -11,6 +11,11 @@ networkConnectTimeout="${networkConnectTimeout:-10}"
 networkMaxTime="${networkMaxTime:-60}"
 networkRetryCount="${networkRetryCount:-2}"
 lidarrTaskWaitTimeout="${lidarrTaskWaitTimeout:-300}"
+lidarrPageSize="${lidarrPageSize:-250}"
+
+if [[ ! "$lidarrPageSize" =~ ^[1-9][0-9]*$ ]]; then
+	lidarrPageSize=250
+fi
 
 CurlRequestOnce () {
 	curl --silent --show-error --fail \
@@ -1117,7 +1122,7 @@ GetMissingCutOffList () {
 
 	log "FINDING MISSING ALBUMS :: sorted by $searchSort"
 
-	amountPerPull=1000
+	amountPerPull="$lidarrPageSize"
 	page=0
 	log "$lidarrMissingTotalRecords Missing Albums Found!"
 	log "Getting Missing Album IDs"
@@ -1131,7 +1136,11 @@ GetMissingCutOffList () {
 				dlnumber="$lidarrMissingTotalRecords"
 			fi
 			log "$page :: missing :: Downloading page $page... ($offset - $dlnumber of $lidarrMissingTotalRecords Results)"
-      CurlRequest "$arrUrl/api/v1/wanted/missing?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id' | sort > /config/extended/cache/tocheck.txt
+			if ! lidarrRecords=$(CurlRequest "$arrUrl/api/v1/wanted/missing?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}"); then
+				log "$page :: missing :: ERROR :: Lidarr API page request failed; stopping so this page is retried on the next service run..."
+				exit 1
+			fi
+			jq -r '.records[].id' <<<"$lidarrRecords" | sort > /config/extended/cache/tocheck.txt
 			log "$page :: missing :: Filtering Album IDs by removing previously searched Album IDs (/config/extended/logs/notfound/<files>)"
       ls /config/extended/logs/notfound/ | sed "s/--.*//" > /config/extended/cache/notfound.txt
 
@@ -1172,8 +1181,11 @@ GetMissingCutOffList () {
 			fi
 
 			log "$page :: cutoff :: Downloading page $page... ($offset - $dlnumber of $lidarrCutoffTotalRecords Results)"
-			# lidarrRecords=$(wget --timeout=0 -q -O - "$arrUrl/api/v1/wanted/cutoff?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id')
-      CurlRequest "$arrUrl/api/v1/wanted/cutoff?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}" | jq -r '.records[].id' | sort > /config/extended/cache/tocheck.txt
+			if ! lidarrRecords=$(CurlRequest "$arrUrl/api/v1/wanted/cutoff?page=$page&pagesize=$amountPerPull&sortKey=$searchOrder&sortDirection=$searchDirection&apikey=${arrApiKey}"); then
+				log "$page :: cutoff :: ERROR :: Lidarr API page request failed; stopping so this page is retried on the next service run..."
+				exit 1
+			fi
+			jq -r '.records[].id' <<<"$lidarrRecords" | sort > /config/extended/cache/tocheck.txt
 
 			log "$page :: cutoff :: Filtering Album IDs by removing previously searched Album IDs (/config/extended/logs/notfound/<files>)"
 			ls /config/extended/logs/notfound/ | sed "s/--.*//" > /config/extended/cache/notfound.txt
