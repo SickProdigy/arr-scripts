@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.8"
+scriptVersion="1.4.9"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -54,7 +54,7 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   pylast \
   mutagen \
   r128gain \
-  "tidal-dl-sg @ git+https://gitea.rcs1.top/sickprodigy/tidal-dl-sg.git@0f2f3376c6bd59e6f68acc2f0cdd191d3681933d" \
+  "tidal-dl-sg @ git+https://gitea.rcs1.top/sickprodigy/tidal-dl-sg.git@3dee3e9438ecba19ff3bc6a39dd779e07d1c92d9" \
   deemix \
   langdetect \
   apprise  && \
