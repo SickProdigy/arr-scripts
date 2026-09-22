@@ -413,7 +413,7 @@ def apprise_notify(apobj, message):
 
 def check_token(token=None):
     log = logging.getLogger('ARLChecker')
-    log.info(f"ARL Token to check: {token}")
+    log.info('Checking configured ARL token')
     log.info('Checking ARL Token Validity...')
     try:
         deezer_check = DeezerPlatformProvider()
