@@ -396,11 +396,18 @@ TidalClientSetup () {
 	XDG_CONFIG_HOME=/config/extended tidaler cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
 	XDG_CONFIG_HOME=/config/extended tidaler cfg path_binary_ffmpeg /usr/bin/ffmpeg 2>&1 | tee -a "/config/logs/$logFileName"
 
-	if [ ! -f "$tidalerConfigDir/token.json" ]; then
+	if ! jq -e '
+		(.access_token | type == "string" and length > 0) and
+		(.refresh_token | type == "string" and length > 0)
+	' "$tidalerConfigDir/token.json" >/dev/null 2>&1; then
 		TidalerStatusCheck
-		log "TIDAL :: ERROR :: Loading client for required authentication, please authenticate, then exit the client..."
-		NotifyWebhook "FatalError" "TIDAL requires authentication, please authenticate now (check logs)"
-		PYTHONUNBUFFERED=1 XDG_CONFIG_HOME=/config/extended tidaler login
+		rm -f "$tidalerConfigDir/token.json"
+		log "TIDAL :: ERROR :: No valid Tidaler token found. PKCE login requires an interactive terminal."
+		log "TIDAL :: Run: docker exec -it lidarr env XDG_CONFIG_HOME=/config/extended tidaler login"
+		NotifyWebhook "FatalError" "TIDAL requires interactive authentication; check the Audio log"
+		log "Script sleeping for $audioScriptInterval..."
+		sleep "$audioScriptInterval"
+		exit 1
 	fi
 
 	if [ ! -d /config/extended/cache/tidal ]; then
