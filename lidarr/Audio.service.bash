@@ -244,7 +244,7 @@ Configuration () {
 		log "Download Quality Check Disabled (enable by setting: requireQuality=true"
 	fi
 
-	if [ "$audioLyricType" == "both" ] || [ "$audioLyricType" == "explicit" ] || [ "$audioLyricType" == "explicit" ]; then
+	if [ "$audioLyricType" == "both" ] || [ "$audioLyricType" == "explicit" ] || [ "$audioLyricType" == "clean" ]; then
 		log "Preferred audio lyric type: $audioLyricType"
 	fi
 	log "Tidal Country Code set to: $tidalCountryCode"
