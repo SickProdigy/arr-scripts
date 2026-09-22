@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.11"
+scriptVersion="1.4.12"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -16,7 +16,7 @@ fi
 set -euo pipefail
 
 if [ "$installDependencies" == "true" ]; then
-uv pip uninstall --system --break-system-packages tidaler >/dev/null 2>&1 || true
+uv pip uninstall --system --break-system-packages tidaler tidal-dl-sg >/dev/null 2>&1 || true
 echo "*** install packages ***" && \
 apk add -U --upgrade --no-cache \
   tidyhtml \
@@ -58,6 +58,8 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   deemix \
   langdetect \
   apprise  && \
+command -v tidal-dl-sg >/dev/null && \
+tidal-dl-sg --version && \
 echo "************ setup SMA ************"
 if [ -d "${SMA_PATH}"  ]; then
   rm -rf "${SMA_PATH}"
