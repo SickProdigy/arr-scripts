@@ -154,9 +154,9 @@ verifyConfig () {
   fi 
  
   audioPath="$downloadPath/audio"
-  tidalerConfigDir="/config/extended/tidaler"
-  tidalerConfigFile="$tidalerConfigDir/settings.json"
-  tidalerConfigTemplate="/config/extended/tidaler.json"
+  tidalSgConfigDir="/config/extended/tidal_dl_sg"
+  tidalSgConfigFile="$tidalSgConfigDir/settings.json"
+  tidalSgConfigTemplate="/config/extended/tidal_dl_sg.json"
 
 
 }
@@ -358,7 +358,7 @@ DownloadFormat () {
 			exit
 		fi
 
-		XDG_CONFIG_HOME=/config/extended tidaler cfg quality_audio LOSSLESS
+		XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg quality_audio LOSSLESS
 		deemixQuality=flac
 		bitrateError=""
 		audioFormatError=""
@@ -390,27 +390,27 @@ NotFoundFolderCleaner () {
 }
 
 TidalClientSetup () {
-	log "TIDAL :: Verifying Tidaler configuration"
-	mkdir -p "$tidalerConfigDir"
-	if [ ! -f "$tidalerConfigFile" ] && [ -f "$tidalerConfigTemplate" ]; then
-		cp "$tidalerConfigTemplate" "$tidalerConfigFile"
-		chmod 666 "$tidalerConfigFile"
+	log "TIDAL :: Verifying TIDAL Downloader Super Gen configuration"
+	mkdir -p "$tidalSgConfigDir"
+	if [ ! -f "$tidalSgConfigFile" ] && [ -f "$tidalSgConfigTemplate" ]; then
+		cp "$tidalSgConfigTemplate" "$tidalSgConfigFile"
+		chmod 666 "$tidalSgConfigFile"
 	fi
 
-	TidalerStatusCheck
+	TIDAL Downloader Super GenStatusCheck
 	DownloadFormat
-	XDG_CONFIG_HOME=/config/extended tidaler cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
-	XDG_CONFIG_HOME=/config/extended tidaler cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
-	XDG_CONFIG_HOME=/config/extended tidaler cfg path_binary_ffmpeg /usr/bin/ffmpeg 2>&1 | tee -a "/config/logs/$logFileName"
+	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
+	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
+	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg path_binary_ffmpeg /usr/bin/ffmpeg 2>&1 | tee -a "/config/logs/$logFileName"
 
 	if ! jq -e '
 		(.access_token | type == "string" and length > 0) and
 		(.refresh_token | type == "string" and length > 0)
-	' "$tidalerConfigDir/token.json" >/dev/null 2>&1; then
-		TidalerStatusCheck
-		rm -f "$tidalerConfigDir/token.json"
-		log "TIDAL :: ERROR :: No valid Tidaler token found. PKCE login requires an interactive terminal."
-		log "TIDAL :: Run: docker exec -it lidarr env XDG_CONFIG_HOME=/config/extended tidaler login"
+	' "$tidalSgConfigDir/token.json" >/dev/null 2>&1; then
+		TIDAL Downloader Super GenStatusCheck
+		rm -f "$tidalSgConfigDir/token.json"
+		log "TIDAL :: ERROR :: No valid TIDAL Downloader Super Gen token found. PKCE login requires an interactive terminal."
+		log "TIDAL :: Run: docker exec -it lidarr env XDG_CONFIG_HOME=/config/extended tidal-dl-sg login"
 		NotifyWebhook "FatalError" "TIDAL requires interactive authentication; check the Audio log"
 		log "Script sleeping for $audioScriptInterval..."
 		sleep "$audioScriptInterval"
@@ -434,17 +434,17 @@ TidalClientSetup () {
 		rm -rf "$audioPath"/incomplete/*
 	fi
 	
-	TidalerStatusCheck
+	TIDAL Downloader Super GenStatusCheck
 	
 }
 
-TidalerStatusCheck () {
+TIDAL Downloader Super GenStatusCheck () {
 	until false
 	do
         running=no
-        if ps aux | grep "tidaler" | grep -v "grep" | read; then
+        if ps aux | grep "tidal-dl-sg" | grep -v "grep" | read; then
             running=yes
-			log "STATUS :: TIDALER :: BUSY :: Pausing/waiting for all active Tidaler tasks to end..."
+			log "STATUS :: TIDAL-DL-SG :: BUSY :: Pausing/waiting for all active TIDAL Downloader Super Gen tasks to end..."
             sleep 2
             continue
         fi
@@ -453,12 +453,12 @@ TidalerStatusCheck () {
 }
 
 TidalClientTest () { 
-	log "TIDAL :: Tidaler client setup verification..."
+	log "TIDAL :: TIDAL Downloader Super Gen client setup verification..."
 	i=0
 	while [ $i -lt 3 ]; do
 		i=$(( $i + 1 ))
-		TidalerStatusCheck
-		XDG_CONFIG_HOME=/config/extended tidaler dl "https://tidal.com/browse/album/$tidalClientTestDownloadId" 2>&1 | tee -a "/config/logs/$logFileName"
+		TIDAL Downloader Super GenStatusCheck
+		XDG_CONFIG_HOME=/config/extended tidal-dl-sg dl "https://tidal.com/browse/album/$tidalClientTestDownloadId" 2>&1 | tee -a "/config/logs/$logFileName"
 		downloadCount=$(find "$audioPath"/incomplete -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | wc -l)
 		if [ $downloadCount -le 0 ]; then
 			continue
@@ -468,7 +468,7 @@ TidalClientTest () {
 	done
  	tidalClientTest="unknown"
 	if [ $downloadCount -le 0 ]; then
-		rm -f "$tidalerConfigDir/token.json"
+		rm -f "$tidalSgConfigDir/token.json"
 		log "TIDAL :: ERROR :: Download failed"
 		log "TIDAL :: ERROR :: You will need to re-authenticate on next script run..."
 		log "TIDAL :: ERROR :: Exiting..."
@@ -649,11 +649,11 @@ DownloadProcess () {
        		fi
 
 		if [ "$2" == "TIDAL" ]; then
-			TidalerStatusCheck
+			TIDAL Downloader Super GenStatusCheck
 
-			XDG_CONFIG_HOME=/config/extended tidaler cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
-			XDG_CONFIG_HOME=/config/extended tidaler cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
-			XDG_CONFIG_HOME=/config/extended tidaler dl "https://tidal.com/browse/album/$1" 2>&1 | tee -a "/config/logs/$logFileName"
+			XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
+			XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
+			XDG_CONFIG_HOME=/config/extended tidal-dl-sg dl "https://tidal.com/browse/album/$1" 2>&1 | tee -a "/config/logs/$logFileName"
 
 			# Verify Client Works...
 			clientTestDlCount=$(find "$audioPath"/incomplete/ -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | wc -l)

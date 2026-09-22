@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.7"
+scriptVersion="1.4.8"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -16,6 +16,7 @@ fi
 set -euo pipefail
 
 if [ "$installDependencies" == "true" ]; then
+uv pip uninstall --system --break-system-packages tidaler >/dev/null 2>&1 || true
 echo "*** install packages ***" && \
 apk add -U --upgrade --no-cache \
   tidyhtml \
@@ -53,7 +54,7 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   pylast \
   mutagen \
   r128gain \
-  "tidaler @ git+https://gitea.rcs1.top/sickprodigy/tidal-dl-ng.git@main" \
+  "tidal-dl-sg @ git+https://gitea.rcs1.top/sickprodigy/tidal-dl-sg.git@0f2f3376c6bd59e6f68acc2f0cdd191d3681933d" \
   deemix \
   langdetect \
   apprise  && \
@@ -73,6 +74,11 @@ echo "setupversion=$scriptVersion" > /config/setup_version.txt
 fi
 
 mkdir -p /custom-services.d/python /config/extended
+
+if [ ! -d /config/extended/tidal_dl_sg ] && [ -d /config/extended/tidaler ]; then
+  echo "Migrate TIDAL Downloader configuration..."
+  cp -a /config/extended/tidaler /config/extended/tidal_dl_sg
+fi
 
 parallel ::: \
   'echo "Download QueueCleaner service..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/universal/services/QueueCleaner -o /custom-services.d/QueueCleaner && echo "Done"' \
@@ -109,9 +115,9 @@ if [ ! -f /config/extended/deemix_config.json ]; then
   echo "Done"
 fi
 
-if [ ! -f /config/extended/tidaler.json ]; then
-  echo "Download Tidaler config..."
-  curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/tidaler.json" -o /config/extended/tidaler.json
+if [ ! -f /config/extended/tidal_dl_sg.json ]; then
+  echo "Download TIDAL Downloader Super Gen config..."
+  curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/tidal_dl_sg.json" -o /config/extended/tidal_dl_sg.json
   echo "Done"
 fi
 
