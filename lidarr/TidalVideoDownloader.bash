@@ -80,7 +80,7 @@ TidalClientSetup () {
 	
 }
 
-TIDAL Downloader Super GenStatusCheck () {
+TidalSgStatusCheck () {
 	until false
 	do
         running=no
@@ -99,7 +99,7 @@ TidalClientTest () {
 	i=0
 	while [ $i -lt 3 ]; do
 		i=$(( $i + 1 ))
-		TIDAL Downloader Super GenStatusCheck
+		TidalSgStatusCheck
 		XDG_CONFIG_HOME=/config/extended tidal-dl-sg dl "https://tidal.com/browse/album/$tidalClientTestDownloadId" 2>&1 | tee -a "/config/logs/$logFileName"
 		downloadCount=$(find "$videoDownloadPath"/incomplete -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | wc -l)
 		if [ $downloadCount -le 0 ]; then

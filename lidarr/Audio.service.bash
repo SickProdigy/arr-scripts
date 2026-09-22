@@ -397,7 +397,7 @@ TidalClientSetup () {
 		chmod 666 "$tidalSgConfigFile"
 	fi
 
-	TIDAL Downloader Super GenStatusCheck
+	TidalSgStatusCheck
 	DownloadFormat
 	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
 	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
@@ -407,7 +407,7 @@ TidalClientSetup () {
 		(.access_token | type == "string" and length > 0) and
 		(.refresh_token | type == "string" and length > 0)
 	' "$tidalSgConfigDir/token.json" >/dev/null 2>&1; then
-		TIDAL Downloader Super GenStatusCheck
+		TidalSgStatusCheck
 		rm -f "$tidalSgConfigDir/token.json"
 		log "TIDAL :: ERROR :: No valid TIDAL Downloader Super Gen token found. PKCE login requires an interactive terminal."
 		log "TIDAL :: Run: docker exec -it lidarr env XDG_CONFIG_HOME=/config/extended tidal-dl-sg login"
@@ -434,11 +434,11 @@ TidalClientSetup () {
 		rm -rf "$audioPath"/incomplete/*
 	fi
 	
-	TIDAL Downloader Super GenStatusCheck
+	TidalSgStatusCheck
 	
 }
 
-TIDAL Downloader Super GenStatusCheck () {
+TidalSgStatusCheck () {
 	until false
 	do
         running=no
@@ -457,7 +457,7 @@ TidalClientTest () {
 	i=0
 	while [ $i -lt 3 ]; do
 		i=$(( $i + 1 ))
-		TIDAL Downloader Super GenStatusCheck
+		TidalSgStatusCheck
 		XDG_CONFIG_HOME=/config/extended tidal-dl-sg dl "https://tidal.com/browse/album/$tidalClientTestDownloadId" 2>&1 | tee -a "/config/logs/$logFileName"
 		downloadCount=$(find "$audioPath"/incomplete -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | wc -l)
 		if [ $downloadCount -le 0 ]; then
@@ -649,7 +649,7 @@ DownloadProcess () {
        		fi
 
 		if [ "$2" == "TIDAL" ]; then
-			TIDAL Downloader Super GenStatusCheck
+			TidalSgStatusCheck
 
 			XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
 			XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
