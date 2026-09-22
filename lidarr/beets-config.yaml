@@ -85,6 +85,7 @@ lastgenre:
     count: 7
     fallback: null
     force: yes
+    keep_existing: yes
     min_weight: 10
     prefer_specific: no
     source: track
@@ -93,7 +94,8 @@ lastgenre:
 
 musicbrainz:
     data_source_mismatch_penalty: 0.0
-    genres: no
+    # Seed genres from MusicBrainz; lastgenre preserves these and adds Last.fm genres.
+    genres: yes
     external_ids:
         spotify: yes
         bandcamp: yes
