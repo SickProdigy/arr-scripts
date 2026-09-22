@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-scriptVersion="1.8"
+scriptVersion="1.10"
 scriptName="BeetsTagger"
 
 #### Import Settings
@@ -46,12 +46,6 @@ else
 fi
 ProcessWithBeets () {
 	log "$1 :: Start Processing..."
-	if find "$1" -type f -iname "*.flac"  | read; then
- 		sleep 0.01
-   	else
-    	log "$1 :: ERROR :: Only supports flac files, exiting..." 
-    	return
-    fi
 	SECONDS=0
 	
 
