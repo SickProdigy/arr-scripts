@@ -1079,7 +1079,15 @@ DeezerClientTest () {
 }
 
 LidarrRootFolderCheck () {
-	if CurlRequest "$arrUrl/api/v1/rootFolder" -H "X-Api-Key: ${arrApiKey}" | sed '1q' | grep "\[\]" | read; then
+	local rootFolderData
+	if ! rootFolderData=$(CurlRequest "$arrUrl/api/v1/rootFolder" -H "X-Api-Key: ${arrApiKey}"); then
+		log "ERROR :: Unable to query Lidarr root folders"
+		log "Script sleeping for $audioScriptInterval..."
+		sleep "$audioScriptInterval"
+		exit 1
+	fi
+
+	if jq -e 'type == "array" and length == 0' <<<"$rootFolderData" >/dev/null; then
 		log "ERROR :: No root folder found"
 		log "ERROR :: Configure root folder in Lidarr to continue..."
 		log "ERROR :: Exiting..."
