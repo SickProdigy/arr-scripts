@@ -149,6 +149,9 @@ verifyConfig () {
   fi 
  
   audioPath="$downloadPath/audio"
+  tidalerConfigDir="/config/extended/tidaler"
+  tidalerConfigFile="$tidalerConfigDir/settings.json"
+  tidalerConfigTemplate="/config/extended/tidaler.json"
 
 
 }
@@ -285,16 +288,16 @@ DownloadFormat () {
 
 	if [ "$audioFormat" == "native" ]; then
 		if [ "$audioBitrate" == "master" ]; then
-			tidalQuality=Master
+			tidalQuality=HI_RES_LOSSLESS
 			deemixQuality=flac
 		elif [ "$audioBitrate" == "lossless" ]; then
-			tidalQuality=HiFi
+			tidalQuality=LOSSLESS
 			deemixQuality=flac
 		elif [ "$audioBitrate" == "high" ]; then
-			tidalQuality=High
+			tidalQuality=HIGH
 			deemixQuality=320
 		elif [ "$audioBitrate" == "low" ]; then
-			tidalQuality=128
+			tidalQuality=LOW
 			deemixQuality=128
 		else
 			log "ERROR :: Invalid audioFormat and audioBitrate options set..."
@@ -308,7 +311,7 @@ DownloadFormat () {
 	else
 		bitrateError="false"
 		audioFormatError="false"
-		tidalQuality=HiFi
+		tidalQuality=LOSSLESS
 		deemixQuality=flac
 
 		case "$audioBitrate" in
@@ -348,7 +351,7 @@ DownloadFormat () {
 			exit
 		fi
 
-		tidal-dl -q HiFi
+		XDG_CONFIG_HOME=/config/extended tidaler cfg quality_audio LOSSLESS
 		deemixQuality=flac
 		bitrateError=""
 		audioFormatError=""
@@ -380,32 +383,24 @@ NotFoundFolderCleaner () {
 }
 
 TidalClientSetup () {
-	log "TIDAL :: Verifying tidal-dl configuration"
-	touch /config/xdg/.tidal-dl.log
-	if [ -f /config/xdg/.tidal-dl.json ]; then
-		rm /config/xdg/.tidal-dl.json
+	log "TIDAL :: Verifying Tidaler configuration"
+	mkdir -p "$tidalerConfigDir"
+	if [ ! -f "$tidalerConfigFile" ] && [ -f "$tidalerConfigTemplate" ]; then
+		cp "$tidalerConfigTemplate" "$tidalerConfigFile"
+		chmod 666 "$tidalerConfigFile"
 	fi
-	if [ ! -f /config/xdg/.tidal-dl.json ]; then
-		log "TIDAL :: No default config found, importing default config \"tidal.json\""
-		if [ -f /config/extended/tidal-dl.json ]; then
-			cp /config/extended/tidal-dl.json /config/xdg/.tidal-dl.json
-			chmod 777 -R /config/xdg/
-		fi
 
-	fi
-	
-	TidaldlStatusCheck
-	tidal-dl -o "$audioPath"/incomplete 2>&1 | tee -a "/config/logs/$logFileName"
+	TidalerStatusCheck
 	DownloadFormat
+	XDG_CONFIG_HOME=/config/extended tidaler cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
+	XDG_CONFIG_HOME=/config/extended tidaler cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
+	XDG_CONFIG_HOME=/config/extended tidaler cfg path_binary_ffmpeg /usr/bin/ffmpeg 2>&1 | tee -a "/config/logs/$logFileName"
 
-	if [ ! -f /config/xdg/.tidal-dl.token.json ]; then
-		TidaldlStatusCheck
-		#log "TIDAL :: ERROR :: Downgrade tidal-dl for workaround..."
-		#pip3 install tidal-dl==2022.3.4.2 --no-cache-dir &>/dev/null
+	if [ ! -f "$tidalerConfigDir/token.json" ]; then
+		TidalerStatusCheck
 		log "TIDAL :: ERROR :: Loading client for required authentication, please authenticate, then exit the client..."
 		NotifyWebhook "FatalError" "TIDAL requires authentication, please authenticate now (check logs)"
-		TidaldlStatusCheck
-		tidal-dl
+		PYTHONUNBUFFERED=1 XDG_CONFIG_HOME=/config/extended tidaler login
 	fi
 
 	if [ ! -d /config/extended/cache/tidal ]; then
@@ -425,19 +420,17 @@ TidalClientSetup () {
 		rm -rf "$audioPath"/incomplete/*
 	fi
 	
-	TidaldlStatusCheck
-	#log "TIDAL :: Upgrade tidal-dl to newer version..."
-	#pip3 install tidal-dl==2022.07.06.1 --no-cache-dir &>/dev/null
+	TidalerStatusCheck
 	
 }
 
-TidaldlStatusCheck () {
+TidalerStatusCheck () {
 	until false
 	do
         running=no
-        if ps aux | grep "tidal-dl" | grep -v "grep" | read; then 
+        if ps aux | grep "tidaler" | grep -v "grep" | read; then
             running=yes
-            log "STATUS :: TIDAL-DL :: BUSY :: Pausing/waiting for all active tidal-dl tasks to end..."
+			log "STATUS :: TIDALER :: BUSY :: Pausing/waiting for all active Tidaler tasks to end..."
             sleep 2
             continue
         fi
@@ -446,12 +439,12 @@ TidaldlStatusCheck () {
 }
 
 TidalClientTest () { 
-	log "TIDAL :: tidal-dl client setup verification..."
+	log "TIDAL :: Tidaler client setup verification..."
 	i=0
 	while [ $i -lt 3 ]; do
 		i=$(( $i + 1 ))
-  		TidaldlStatusCheck
-		tidal-dl -q Normal -o "$audioPath"/incomplete -l "$tidalClientTestDownloadId" 2>&1 | tee -a "/config/logs/$logFileName"
+		TidalerStatusCheck
+		XDG_CONFIG_HOME=/config/extended tidaler dl "https://tidal.com/browse/album/$tidalClientTestDownloadId" 2>&1 | tee -a "/config/logs/$logFileName"
 		downloadCount=$(find "$audioPath"/incomplete -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | wc -l)
 		if [ $downloadCount -le 0 ]; then
 			continue
@@ -461,9 +454,7 @@ TidalClientTest () {
 	done
  	tidalClientTest="unknown"
 	if [ $downloadCount -le 0 ]; then
-		if [ -f /config/xdg/.tidal-dl.token.json ]; then
-			rm /config/xdg/.tidal-dl.token.json
-		fi
+		rm -f "$tidalerConfigDir/token.json"
 		log "TIDAL :: ERROR :: Download failed"
 		log "TIDAL :: ERROR :: You will need to re-authenticate on next script run..."
 		log "TIDAL :: ERROR :: Exiting..."
@@ -644,9 +635,11 @@ DownloadProcess () {
        		fi
 
 		if [ "$2" == "TIDAL" ]; then
-			TidaldlStatusCheck
+			TidalerStatusCheck
 
-			tidal-dl -q $tidalQuality -o "$audioPath/incomplete" -l "$1"  2>&1 | tee -a "/config/logs/$logFileName"
+			XDG_CONFIG_HOME=/config/extended tidaler cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
+			XDG_CONFIG_HOME=/config/extended tidaler cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
+			XDG_CONFIG_HOME=/config/extended tidaler dl "https://tidal.com/browse/album/$1" 2>&1 | tee -a "/config/logs/$logFileName"
 
 			# Verify Client Works...
 			clientTestDlCount=$(find "$audioPath"/incomplete/ -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | wc -l)

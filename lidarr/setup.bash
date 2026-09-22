@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.5"
+scriptVersion="1.4.6"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -53,7 +53,7 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   pylast \
   mutagen \
   r128gain \
-  tidal-dl \
+  "tidaler @ git+https://gitea.rcs1.top/sickprodigy/tidal-dl-ng.git@main" \
   deemix \
   langdetect \
   apprise  && \
@@ -109,9 +109,9 @@ if [ ! -f /config/extended/deemix_config.json ]; then
   echo "Done"
 fi
 
-if [ ! -f /config/extended/tidal-dl.json ]; then
-  echo "Download Tidal config..."
-  curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/tidal-dl.json" -o /config/extended/tidal-dl.json
+if [ ! -f /config/extended/tidaler.json ]; then
+  echo "Download Tidaler config..."
+  curl -sfL "https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/tidaler.json" -o /config/extended/tidaler.json
   echo "Done"
 fi
 
