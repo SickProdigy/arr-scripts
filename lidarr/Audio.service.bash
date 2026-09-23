@@ -1578,6 +1578,32 @@ CalculateTitleDistance () {
 	printf '%s\n' "$distance"
 }
 
+NormalizeArtistName () {
+	python3 -c 'import sys, unicodedata; print("".join(c for c in unicodedata.normalize("NFKC", sys.argv[1]).casefold() if c.isalnum()))' "$1"
+}
+
+TidalArtistMatchesLidarr () {
+	local expectedArtist
+	local candidateArtist
+	local normalizedCandidateArtist
+
+	# Various Artists releases intentionally contain unrelated track artists.
+	if [ "$lidarrArtistForeignArtistId" == "89ad4ac3-39f7-470e-963a-56509c546377" ]; then
+		return 0
+	fi
+
+	expectedArtist=$(NormalizeArtistName "$lidarrArtistName") || return 1
+	[ -n "$expectedArtist" ] || return 1
+	while IFS= read -r candidateArtist; do
+		normalizedCandidateArtist=$(NormalizeArtistName "$candidateArtist") || continue
+		if [ -n "$normalizedCandidateArtist" ] && [ "$normalizedCandidateArtist" == "$expectedArtist" ]; then
+			return 0
+		fi
+	done < <(echo "$1" | jq -r '[.artist.name, (.artists[]?.name)] | map(select(. != null and . != "")) | unique[]')
+
+	return 1
+}
+
 TitleDistanceIsAcceptable () {
 	local expected="$1"
 	local candidate="$2"
@@ -1899,6 +1925,11 @@ FuzzyTidalSearch () {
 	if [ ! -z "$tidalSearch" ]; then
 		for tidalAlbumID in $(echo "$tidalSearch" | jq -r .id | sort -u); do
 			tidalAlbumData="$(echo "$tidalSearch" | jq -r "select(.id==$tidalAlbumID)")"
+			if ! TidalArtistMatchesLidarr "$tidalAlbumData"; then
+				tidalCandidateArtists=$(echo "$tidalAlbumData" | jq -r '[.artist.name, (.artists[]?.name)] | map(select(. != null and . != "")) | unique | join(", ")')
+				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: Artist mismatch ($lidarrArtistName vs $tidalCandidateArtists); skipping candidate..."
+				continue
+			fi
 			tidalAlbumTitle=$(echo "$tidalAlbumData"| jq -r .title)
 			tidalAlbumTitleClean=$(echo ${tidalAlbumTitle} | sed -e "s%[^[:alpha:][:digit:]]%%g" -e "s/  */ /g" | sed 's/^[.]*//' | sed  's/[.]*$//g' | sed  's/^ *//g' | sed 's/ *$//g')
    			tidalAlbumTitleClean="${tidalAlbumTitleClean:0:130}"
