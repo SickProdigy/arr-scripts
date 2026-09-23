@@ -1371,7 +1371,8 @@ SearchProcess () {
 		lidarrAlbumReleaseIds=$(echo "$lidarrAlbumData" | jq -r ".releases | sort_by(.trackCount) | reverse | .[].id")
 		lidarrAlbumReleasesMinTrackCount=$(echo "$lidarrAlbumData" | jq -r ".releases[].trackCount" | sort -n | head -n1)
 		lidarrAlbumReleasesMaxTrackCount=$(echo "$lidarrAlbumData" | jq -r ".releases[].trackCount" | sort -n -r | head -n1)
-		lidarrExpectedDurationMs=$(CurlRequestOnce "$arrUrl/api/v1/track?albumId=$wantedAlbumId" --header "X-Api-Key:${arrApiKey}" | jq -r '[.[].duration // 0] | add // 0')
+		lidarrTracksData=$(CurlRequestOnce "$arrUrl/api/v1/track?albumId=$wantedAlbumId" --header "X-Api-Key:${arrApiKey}")
+		lidarrExpectedDurationMs=$(echo "$lidarrTracksData" | jq -r '[.[].duration // 0] | add // 0')
 		lidarrAlbumReleaseDate=$(echo "$lidarrAlbumData" | jq -r .releaseDate)
 		lidarrAlbumReleaseDate=${lidarrAlbumReleaseDate:0:10}
 		lidarrAlbumReleaseDateClean="$(echo $lidarrAlbumReleaseDate | sed -e "s%[^[:digit:]]%%g")"
@@ -1642,6 +1643,77 @@ CalculateTitleDistance () {
 	printf '%s\n' "$distance"
 }
 
+CandidateTrackListMatchesLidarr () {
+	local provider="$1"
+	local candidateTrackCount="$2"
+	local candidateTitles
+	local expectedTitles
+	local matchResult
+
+	if [ "$provider" == "DEEZER" ]; then
+		candidateTitles=$(echo "$deezerAlbumData" | jq -c '[.tracks.data[].title]')
+	elif [ "$provider" == "TIDAL" ]; then
+		local tidalTracksData
+		tidalTracksData=$(CurlRequest "https://api.tidal.com/v1/albums/$3/tracks?countryCode=${tidalCountryCode}&limit=100" -H 'x-tidal-token: CzET4vdadNUFQ5JU')
+		candidateTitles=$(echo "$tidalTracksData" | jq -c '[.items[].title]')
+	else
+		return 1
+	fi
+
+	expectedTitles=$(echo "$lidarrTracksData" | jq -c '[.[].title]')
+	if [ -z "$candidateTitles" ] || [ "$candidateTitles" == "[]" ] || [ -z "$expectedTitles" ] || [ "$expectedTitles" == "[]" ]; then
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: $provider :: ERROR :: Unable to retrieve track titles; skipping candidate..."
+		return 1
+	fi
+
+	if [ "$(echo "$candidateTitles" | jq 'length')" != "$candidateTrackCount" ]; then
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: $provider :: Incomplete candidate track list; skipping candidate..."
+		return 1
+	fi
+
+	if matchResult=$(python3 - "$expectedTitles" "$candidateTitles" <<'PY'
+import json
+import re
+import sys
+import unicodedata
+
+
+def normalize(title):
+    title = unicodedata.normalize("NFKC", title).casefold()
+    title = re.sub(r"\s*[\[(]?\s*(?:feat(?:uring)?|ft\.?)\s+.*$", "", title)
+    return "".join(character for character in title if character.isalnum())
+
+
+expected = [normalize(title) for title in json.loads(sys.argv[1])]
+candidate = [normalize(title) for title in json.loads(sys.argv[2])]
+
+# Ordered matching permits bonus tracks without confusing similarly titled albums.
+previous = [0] * (len(candidate) + 1)
+for expected_title in expected:
+    current = [0]
+    for index, candidate_title in enumerate(candidate, 1):
+        if expected_title and expected_title == candidate_title:
+            current.append(previous[index - 1] + 1)
+        else:
+            current.append(max(previous[index], current[-1]))
+    previous = current
+
+matched = previous[-1]
+total = max(len(expected), len(candidate))
+required = max(1, (total * 85 + 99) // 100)
+percent = round((matched / total) * 100)
+print(f"{matched}/{total} tracks ({percent}%)")
+sys.exit(0 if matched >= required else 1)
+PY
+	); then
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: $provider :: Track list match accepted: $matchResult"
+		return 0
+	fi
+
+	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: $provider :: Track list mismatch ($matchResult); skipping candidate..."
+	return 1
+}
+
 NormalizeArtistName () {
 	python3 -c 'import sys, unicodedata; print("".join(c for c in unicodedata.normalize("NFKC", sys.argv[1]).casefold() if c.isalnum()))' "$1"
 }
@@ -1784,6 +1856,9 @@ ArtistDeezerSearch () {
 		if [ "$deezerAlbumTrackCount" -lt "$lidarrAlbumReleasesMinTrackCount" ]; then
 			continue
 		fi
+		if ! CandidateTrackListMatchesLidarr "DEEZER" "$deezerAlbumTrackCount" "$deezerAlbumID"; then
+			continue
+		fi
 		
 		log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
 
@@ -1871,6 +1946,9 @@ FuzzyDeezerSearch () {
 			if [ "$deezerAlbumTrackCount" -lt "$lidarrAlbumReleasesMinTrackCount" ]; then
 				continue
 			fi
+			if ! CandidateTrackListMatchesLidarr "DEEZER" "$deezerAlbumTrackCount" "$deezerAlbumID"; then
+				continue
+			fi
 
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $deezerAlbumTitleClean :: Deezer MATCH Found :: Calculated Difference = $diff"
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: Downloading $deezerAlbumTrackCount Tracks :: $deezerAlbumTitle ($downloadedReleaseYear)"
@@ -1945,6 +2023,9 @@ ArtistTidalSearch () {
 			continue
 		fi
 		if TitleDistanceIsAcceptable "$lidarrAlbumReleaseTitleClean" "$tidalAlbumTitleClean" "$diff"; then
+			if ! CandidateTrackListMatchesLidarr "TIDAL" "$downloadedTrackCount" "$tidalArtistAlbumId"; then
+				continue
+			fi
 			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal MATCH Found :: Calculated Difference = $diff"
 
 			# Execute Download
@@ -2011,6 +2092,9 @@ FuzzyTidalSearch () {
 				continue
 			fi
 			if TitleDistanceIsAcceptable "$lidarrAlbumReleaseTitleClean" "$tidalAlbumTitleClean" "$diff"; then
+				if ! CandidateTrackListMatchesLidarr "TIDAL" "$downloadedTrackCount" "$tidalAlbumID"; then
+					continue
+				fi
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: $lidarrAlbumReleaseTitleClean vs $tidalAlbumTitleClean :: Tidal MATCH Found :: Calculated Difference = $diff"
 				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: Downloading $downloadedTrackCount Tracks :: $tidalAlbumTitle ($downloadedReleaseYear)"
 				
