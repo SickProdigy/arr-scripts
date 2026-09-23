@@ -877,16 +877,20 @@ DownloadProcess () {
 TagWithLidarrMusicBrainzIds () {
 	local targetPath="$1"
 	local lidarrMatchedReleaseId
+	local lidarrMatchedReleaseCountry
 
 	lidarrMatchedReleaseId=$(echo "$lidarrAlbumData" | jq -r '[.releases[] | select(.monitored == true)][0].foreignReleaseId // empty')
+	lidarrMatchedReleaseCountry=$(echo "$lidarrAlbumData" | jq -r '[.releases[] | select(.monitored == true)][0].country[0] // empty')
 
-	if [ -z "$lidarrMatchedReleaseId" ] || [ -z "$lidarrAlbumForeignAlbumId" ] || [ -z "$lidarrArtistForeignArtistId" ]; then
+	if [ -z "$lidarrMatchedReleaseId" ] || [ -z "$lidarrAlbumForeignAlbumId" ] || [ -z "$lidarrArtistForeignArtistId" ] || [ -z "$lidarrTracksData" ]; then
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Unable to resolve Lidarr MusicBrainz IDs; skipping ID tagging..."
 		return 1
 	fi
 
 	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Tagging files with Lidarr MusicBrainz release $lidarrMatchedReleaseId"
-	python3 - "$targetPath" "$lidarrMatchedReleaseId" "$lidarrAlbumForeignAlbumId" "$lidarrArtistForeignArtistId" <<'PY'
+	python3 - "$targetPath" "$lidarrMatchedReleaseId" "$lidarrAlbumForeignAlbumId" "$lidarrArtistForeignArtistId" "$lidarrMatchedReleaseCountry" "$lidarrTracksData" <<'PY'
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -897,28 +901,57 @@ root = Path(sys.argv[1])
 release_id = sys.argv[2]
 release_group_id = sys.argv[3]
 artist_id = sys.argv[4]
+release_country = sys.argv[5]
+tracks = json.loads(sys.argv[6])
 
 # Mutagen does not register the MusicBrainz release-group MP4 atom by default.
 EasyMP4Tags.RegisterFreeformKey(
     "musicbrainz_releasegroupid", "MusicBrainz Release Group Id"
 )
+EasyMP4Tags.RegisterFreeformKey(
+    "musicbrainz_releasetrackid", "MusicBrainz Release Track Id"
+)
+
+track_ids = {}
+for track in tracks:
+    try:
+        track_number = int(re.match(r"\d+", str(track["trackNumber"])).group())
+        key = (int(track.get("mediumNumber") or 1), track_number)
+        track_ids[key] = (track["foreignRecordingId"], track["foreignTrackId"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        continue
 
 tag_values = {
     "musicbrainz_albumid": release_id,
     "musicbrainz_releasegroupid": release_group_id,
     "musicbrainz_albumartistid": artist_id,
 }
+if release_country:
+    tag_values["releasecountry"] = release_country
 audio_extensions = {".flac", ".m4a", ".mp3", ".opus"}
 
+tagged_files = 0
 for path in root.rglob("*"):
     if not path.is_file() or path.suffix.lower() not in audio_extensions:
         continue
     audio = File(path, easy=True)
     if audio is None:
         raise RuntimeError(f"Unsupported audio file: {path}")
+    try:
+        disc_number = int(str(audio.get("discnumber", ["1"])[0]).split("/", 1)[0])
+        track_number = int(str(audio["tracknumber"][0]).split("/", 1)[0])
+        recording_id, release_track_id = track_ids[(disc_number, track_number)]
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(f"No Lidarr track mapping for {path.name}") from error
     for key, value in tag_values.items():
         audio[key] = [value]
+    audio["musicbrainz_trackid"] = [recording_id]
+    audio["musicbrainz_releasetrackid"] = [release_track_id]
     audio.save()
+    tagged_files += 1
+
+if tagged_files == 0:
+    raise RuntimeError("No supported audio files were tagged")
 PY
 }
 
