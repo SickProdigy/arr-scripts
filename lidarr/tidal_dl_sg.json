@@ -9,7 +9,7 @@
   "format_video": "{artist_name} - {track_title}",
   "path_binary_ffmpeg": "/usr/bin/ffmpeg",
   "album_track_num_pad_min": 2,
-  "extract_flac": false,
+  "extract_flac": true,
   "cover_album_file": false,
   "lyrics_file": true,
   "lyrics_embed": false,
