@@ -68,7 +68,7 @@ ProcessWithBeets () {
 	sleep 0.5
 
         log "$1 :: Begin matching with beets!"
-	XDG_CONFIG_HOME=/config/extended beet -c /config/extended/beets-config-lidarr.yaml -l /config/extended/library-lidarr.blb -d "$1" import -qC "$1" 2>&1 | tee -a "/config/logs/$logFileName"
+	BEETSDIR=/config/extended beet -c /config/extended/beets-config-lidarr.yaml -l /config/extended/library-lidarr.blb -d "$1" import -qC "$1" 2>&1 | tee -a "/config/logs/$logFileName"
 	# Fix tags
 	log "$1 :: Fixing Tags..."
 		
