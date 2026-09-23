@@ -824,7 +824,7 @@ DownloadProcess () {
 
 	fi
 
-	if ! TagWithLidarrMusicBrainzIds "$audioPath/incomplete" "$5"; then
+	if ! TagWithLidarrMusicBrainzIds "$audioPath/incomplete"; then
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: MusicBrainz ID tagging failed; refusing Lidarr import..."
 		if [ "$2" == "DEEZER" ]; then
 			rm -f "/config/extended/logs/downloaded/deezer/$1"
@@ -876,13 +876,9 @@ DownloadProcess () {
 
 TagWithLidarrMusicBrainzIds () {
 	local targetPath="$1"
-	local trackCount="$2"
 	local lidarrMatchedReleaseId
 
-	lidarrMatchedReleaseId=$(echo "$lidarrAlbumData" | jq -r --argjson trackCount "$trackCount" '
-		[.releases[] | select(.trackCount == $trackCount)]
-		| sort_by(if .monitored then 0 else 1 end)
-		| .[0].foreignReleaseId // empty')
+	lidarrMatchedReleaseId=$(echo "$lidarrAlbumData" | jq -r '[.releases[] | select(.monitored == true)][0].foreignReleaseId // empty')
 
 	if [ -z "$lidarrMatchedReleaseId" ] || [ -z "$lidarrAlbumForeignAlbumId" ] || [ -z "$lidarrArtistForeignArtistId" ]; then
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Unable to resolve Lidarr MusicBrainz IDs; skipping ID tagging..."
@@ -911,7 +907,6 @@ tag_values = {
     "musicbrainz_albumid": release_id,
     "musicbrainz_releasegroupid": release_group_id,
     "musicbrainz_albumartistid": artist_id,
-    "musicbrainz_artistid": artist_id,
 }
 audio_extensions = {".flac", ".m4a", ".mp3", ".opus"}
 
