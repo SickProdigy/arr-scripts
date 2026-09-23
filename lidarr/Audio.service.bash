@@ -401,6 +401,8 @@ TidalClientSetup () {
 	DownloadFormat
 	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg download_base_path "$audioPath/incomplete" 2>&1 | tee -a "/config/logs/$logFileName"
 	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg quality_audio "$tidalQuality" 2>&1 | tee -a "/config/logs/$logFileName"
+	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg format_album "{album_artist}/{album_title} ({album_year})/{track_volume_num_optional}{album_track_num} - {track_title}" 2>&1 | tee -a "/config/logs/$logFileName"
+	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg album_track_num_pad_min 2 2>&1 | tee -a "/config/logs/$logFileName"
 	XDG_CONFIG_HOME=/config/extended tidal-dl-sg cfg path_binary_ffmpeg /usr/bin/ffmpeg 2>&1 | tee -a "/config/logs/$logFileName"
 
 	if ! jq -e '
