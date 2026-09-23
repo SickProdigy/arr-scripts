@@ -227,7 +227,7 @@ Configuration () {
 
 	log "Output format: $audioFormat"
 
-	if [ "$audioFormat" != "native" ]; then 
+	if [ "$audioFormat" != "native" ]; then
 		if [ "$audioFormat" == "alac" ]; then
 			audioBitrateText="LOSSLESS"
 		else
@@ -823,6 +823,17 @@ DownloadProcess () {
 		done
 
 	fi
+
+	if ! TagWithLidarrMusicBrainzIds "$audioPath/incomplete" "$5"; then
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: MusicBrainz ID tagging failed; refusing Lidarr import..."
+		if [ "$2" == "DEEZER" ]; then
+			rm -f "/config/extended/logs/downloaded/deezer/$1"
+		fi
+		if [ "$2" == "TIDAL" ]; then
+			rm -f "/config/extended/logs/downloaded/tidal/$1"
+		fi
+		return
+	fi
 	
 	if [ "$enableReplaygainTags" == "true" ]; then
 		AddReplaygainTags "$audioPath/incomplete"
@@ -861,6 +872,59 @@ DownloadProcess () {
 	if [ -d "$audioPath/complete/$downloadedAlbumFolder" ]; then
 		rm -rf "$audioPath"/incomplete/*
 	fi
+}
+
+TagWithLidarrMusicBrainzIds () {
+	local targetPath="$1"
+	local trackCount="$2"
+	local lidarrMatchedReleaseId
+
+	lidarrMatchedReleaseId=$(echo "$lidarrAlbumData" | jq -r --argjson trackCount "$trackCount" '
+		[.releases[] | select(.trackCount == $trackCount)]
+		| sort_by(if .monitored then 0 else 1 end)
+		| .[0].foreignReleaseId // empty')
+
+	if [ -z "$lidarrMatchedReleaseId" ] || [ -z "$lidarrAlbumForeignAlbumId" ] || [ -z "$lidarrArtistForeignArtistId" ]; then
+		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Unable to resolve Lidarr MusicBrainz IDs; skipping ID tagging..."
+		return 1
+	fi
+
+	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Tagging files with Lidarr MusicBrainz release $lidarrMatchedReleaseId"
+	python3 - "$targetPath" "$lidarrMatchedReleaseId" "$lidarrAlbumForeignAlbumId" "$lidarrArtistForeignArtistId" <<'PY'
+import sys
+from pathlib import Path
+
+from mutagen import File
+from mutagen.easymp4 import EasyMP4Tags
+
+root = Path(sys.argv[1])
+release_id = sys.argv[2]
+release_group_id = sys.argv[3]
+artist_id = sys.argv[4]
+
+# Mutagen does not register the MusicBrainz release-group MP4 atom by default.
+EasyMP4Tags.RegisterFreeformKey(
+    "musicbrainz_releasegroupid", "MusicBrainz Release Group Id"
+)
+
+tag_values = {
+    "musicbrainz_albumid": release_id,
+    "musicbrainz_releasegroupid": release_group_id,
+    "musicbrainz_albumartistid": artist_id,
+    "musicbrainz_artistid": artist_id,
+}
+audio_extensions = {".flac", ".m4a", ".mp3", ".opus"}
+
+for path in root.rglob("*"):
+    if not path.is_file() or path.suffix.lower() not in audio_extensions:
+        continue
+    audio = File(path, easy=True)
+    if audio is None:
+        raise RuntimeError(f"Unsupported audio file: {path}")
+    for key, value in tag_values.items():
+        audio[key] = [value]
+    audio.save()
+PY
 }
 
 ProcessWithBeets () {
