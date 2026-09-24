@@ -7,7 +7,9 @@ asciify_paths: true
 
 lyrics:
     auto: yes
-    sources: [lrclib, lrcmux, genius]
+    # Prefer synchronized providers. Genius is plain-text only and its shared
+    # API rate limit can stall large imports through repeated HTTP 429 retries.
+    sources: [lrclib, lrcmux]
     synced: yes
     keep_synced: yes
 
