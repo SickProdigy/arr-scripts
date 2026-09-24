@@ -55,6 +55,44 @@ Spotify import-list failures have two common causes:
 
 Saved Albums, Followed Artists, and Playlist imports may each repeat the same underlying authentication error. Diagnose the first renewal response rather than treating every import-list error as a separate failure. Keep refresh tokens and renewal URLs containing tokens out of logs and issue reports. An `Invalid token` response alone does not establish that the Spotify account tier is the cause.
 
+### ReplayGain
+
+ReplayGain support is handled by the standalone `ReplayGainTagger.bash` Lidarr custom script, not by Beets. When `enableReplaygainTags="true"`, AutoConfig registers it for Lidarr release-import and upgrade events, so it runs after the album is in its final Lidarr library path. This covers arr-scripts audio downloads, ordinary Lidarr imports, manual imports, and upgrades/replacements whether Beets is enabled or disabled.
+
+ReplayGain writes loudness metadata tags only. It does not normalize, transcode, or modify audio samples. Players that support ReplayGain use those tags during playback. Partial library coverage can cause large volume jumps: tagged modern albums may be attenuated by 8-10 dB while untagged tracks play at full volume, which is especially noticeable during shuffle and CarPlay playback.
+
+Configuration options in `/config/extended.conf`:
+
+* `enableReplaygainTags`: enables post-import ReplayGain tagging.
+* `replaygainTargetLoudness`: target loudness in LUFS. The default is `-18`, the ReplayGain 2.0 standard. This may sound quieter than untagged files; use a higher player preamp/amplifier setting if desired rather than silently changing the scanner target.
+* `replaygainThreads`: positive integer or `MAX`, controls parallel album jobs for explicit backfill workflows. Normal Lidarr events process one imported album folder.
+* `replaygainPreserveMtime`: preserves file modified times while writing metadata tags.
+* `replaygainClipMode`: `n` disables clipping protection, `p` protects positive gain values, and `a` protects all gain values.
+* `replaygainTruePeak`: enables inter-sample true-peak measurement when set to `true`.
+* `replaygainMaxPeak`: maximum playback peak in dB when clipping protection is applied. For example, `-1` provides 1 dB of true-peak headroom.
+
+Use track gain for shuffle, playlists, and mixed playback. Use album gain when listening to full albums so intentional track-to-track dynamics are preserved. The script writes both track and album tags for supported formats. Some clients, including current Amperfy releases, always use track gain even though they import album-gain metadata.
+
+Existing libraries are not backfilled automatically during updates. To inspect current coverage without writing tags:
+
+```bash
+/config/extended/ReplayGainTagger.bash --audit --path /music
+```
+
+To perform a dry-run backfill audit:
+
+```bash
+/config/extended/ReplayGainTagger.bash --backfill --dry-run --path /music
+```
+
+To explicitly backfill `/music`, writing ReplayGain metadata tags:
+
+```bash
+/config/extended/ReplayGainTagger.bash --backfill --path /music
+```
+
+The audit reports complete track+album tag coverage, partial tags, untagged files, unreadable or unsupported files, and albums with mixed tag coverage.
+
 
 ## Features
 
@@ -77,7 +115,7 @@ Saved Albums, Followed Artists, and Playlist imports may each repeat the same un
   * Notifies Lidarr to automatically import downloaded files
   * Music is properly tagged and includes coverart before Lidarr Receives them
   * Can pre-match and tag files using Beets
-  * Can add Replaygain tags to tracks
+  * Can add ReplayGain 2.0 track and album metadata tags after Lidarr import
   * Can add top artists from online services
   * Can add artists related to your artists in your existing Library
   * Can notify Plex application to scan the individual artist folder after successful import, thus increasing the speed of Plex scanning and reducing overhead
@@ -130,7 +168,7 @@ For source and updates, visit the [repository](https://gitea.rcs1.top/sickprodig
 * [Beets](https://beets.io/)
 * [Deemix download client](https://deemix.app/)
 * [Tidal-Media-Downloader client](https://github.com/yaronzz/Tidal-Media-Downloader)
-* [r128gain](https://github.com/desbma/r128gain)
+* [rsgain](https://github.com/complexlogic/rsgain)
 * [Algorithm Implementation/Strings/Levenshtein distance](https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance)
 * [ffmpeg](https://ffmpeg.org/)
 * [yt-dlp](https://github.com/yt-dlp/yt-dlp)

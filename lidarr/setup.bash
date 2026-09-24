@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.12"
+scriptVersion="1.4.13"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -36,6 +36,7 @@ apk add -U --upgrade --no-cache \
   uv \
   parallel \
   npm && \
+{ apk add --no-cache rsgain || apk add --no-cache -X http://dl-cdn.alpinelinux.org/alpine/edge/community rsgain; } && \
 echo "*** install freyr client ***" && \
 apk add --no-cache -X http://dl-cdn.alpinelinux.org/alpine/edge/testing atomicparsley && \
 npm install -g miraclx/freyr-js &&\
@@ -53,7 +54,6 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   python-telegram-bot \
   pylast \
   mutagen \
-  r128gain \
   "tidal-dl-sg==0.2.0" \
   deemix \
   langdetect \
@@ -96,6 +96,7 @@ parallel ::: \
   'echo "Download SMA config..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/sma.ini -o /config/extended/sma.ini  && echo "Done"' \
   'echo "Download LyricExtractor script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/LyricExtractor.bash -o /config/extended/LyricExtractor.bash && echo "Done"' \
   'echo "Download ArtworkExtractor script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/ArtworkExtractor.bash -o /config/extended/ArtworkExtractor.bash && echo "Done"' \
+  'echo "Download ReplayGain Tagger script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/ReplayGainTagger.bash -o /config/extended/ReplayGainTagger.bash && echo "Done"' \
   'echo "Download Beets Tagger script..." && curl -sfL https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/BeetsTagger.bash -o /config/extended/BeetsTagger.bash && echo "Done"'
 
 

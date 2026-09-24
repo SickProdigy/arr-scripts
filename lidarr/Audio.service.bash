@@ -250,7 +250,7 @@ Configuration () {
 	log "Tidal Country Code set to: $tidalCountryCode"
 
 	if [ "$enableReplaygainTags" == "true" ]; then
-		log "Replaygain Tagging Enabled"
+		log "Replaygain Tagging Enabled for post-import Lidarr events"
 	else
 		log "Replaygain Tagging Disabled"
 	fi
@@ -836,11 +836,7 @@ DownloadProcess () {
 		return
 	fi
 	
-	if [ "$enableReplaygainTags" == "true" ]; then
-		AddReplaygainTags "$audioPath/incomplete"
-	else
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Replaygain Tagging Disabled (set enableReplaygainTags=true to enable...)"
-	fi
+	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ReplayGain tagging is deferred until Lidarr imports the album to its final library path..."
 	
 	albumquality="$(find "$audioPath"/incomplete/ -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | head -n 1 | egrep -i -E -o "\.{1}\w*$" | sed  's/\.//g')"
 	# Lidarr parses a trailing bracketed value from the download title as ReleaseGroup.
@@ -1100,13 +1096,6 @@ DownloadQualityCheck () {
 	else
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType ::  Skipping download quality check... (enable by setting: requireQuality=true)"
 	fi
-}
-
-AddReplaygainTags () {
-	# Input Data
-	# $1 Folder path to scan and add tags
-	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Adding Replaygain Tags using r128gain"
-	r128gain -r -c 1 -a "$1" &>/dev/null
 }
 
 NotifyLidarrForImport () {
