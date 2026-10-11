@@ -97,9 +97,10 @@ The worker reads ten wanted items per pass and stores its page cursor in the
 job database, continuing from that point after a restart. It revisits the first
 page after reaching the end, so newly missing items are picked up on later
 passes. Existing jobs are refreshed separately from discovery; changing pages
-does not complete or abandon a download. Up to three newly eligible streaming
-miss markers are checked directly each pass, even outside the current page.
-The existing limit of three active Soulseek jobs still applies. Progress logs
+does not complete or abandon a download. One newly eligible streaming
+miss marker is checked directly each pass, even outside the current page.
+Only one Soulseek job can actively search, download, or import at a time per
+application; checking ten wanted items does not enqueue ten downloads. Progress logs
 show the wanted page, number of items checked, and eligible targets.
 
 ## Import behavior and limits
@@ -132,8 +133,11 @@ overlapping workers. For a read-only connection and wanted-list check, run
 (replace the app as needed). This bypasses the worker lock, prints no credentials,
 and does not start searches or downloads.
 
-At most three jobs actively search/download/import per
-application. Search misses wait one day; API failures defer for five minutes.
+At most one job actively searches, downloads, or imports per application.
+A queued or slow transfer holds that slot until it finishes or requires review.
+The limit counts albums in Lidarr, not individual tracks; one album can contain
+many files. Tidal and Deezer continue independently. Previously active jobs are
+retained; no new searches start until they drop below the new limit. Search misses wait one day; API failures defer for five minutes.
 Searches and download batches have durable IDs; uncertain download requests are
 reconciled rather than blindly submitted again.
 

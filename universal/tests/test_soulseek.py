@@ -370,7 +370,20 @@ class WorkerTests(unittest.TestCase):
         self.arr.movies = [{**self.arr.movies[0], "id": number} for number in range(1, 10)]
         self.tick()
         self.tick()
-        self.assertEqual(len([p for p, _ in self.slsk.posts if p.endswith("searches")]), 3)
+        self.assertEqual(len([p for p, _ in self.slsk.posts if p.endswith("searches")]), 1)
+
+    def test_slow_queued_transfer_holds_slot_until_finished(self):
+        self.reach_batch()
+        self.arr.movies = [{**self.arr.movies[0], "id": number} for number in range(1, 10)]
+        for _ in range(3):
+            self.tick(86401)
+        self.assertEqual(self.row()["state"], "downloading")
+        self.assertEqual(len(self.slsk.searches), 1)
+        self.arr.movies[0]["hasFile"] = True
+        self.worker.save(1, "done", {})
+        self.tick()
+        self.assertEqual(len(self.slsk.searches), 2)
+        self.assertEqual(self.worker.db.execute("SELECT count(*) FROM jobs WHERE state='searching'").fetchone()[0], 1)
 
     def test_large_library_starts_searches_before_second_page_and_persists_cursor(self):
         calls = []
@@ -386,14 +399,14 @@ class WorkerTests(unittest.TestCase):
         self.arr.call = paginated
         self.tick()
         self.assertEqual(calls, [1])
-        self.assertEqual(len(self.slsk.searches), 3)
+        self.assertEqual(len(self.slsk.searches), 1)
         self.assertEqual(self.worker.db.execute("SELECT count(*) FROM jobs").fetchone()[0], 10)
         self.worker.db.close()
         self.worker = soulseek.Worker("radarr", self.arr, self.slsk, self.root, self.root, delay=0, clock=lambda: self.now)
         self.tick()
         self.assertEqual(calls, [1,2])
         self.assertEqual(self.row()["state"], "enqueueing")
-        self.assertEqual(len(self.slsk.searches), 3)
+        self.assertEqual(len(self.slsk.searches), 1)
 
     def test_page_absence_does_not_complete_waiting_job(self):
         self.worker.delay = 3600

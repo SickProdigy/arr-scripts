@@ -389,7 +389,7 @@ class Worker:
         page_ids = {record["id"] for record in records}
         priority_markers = {}
         # Streaming misses should not wait for the wanted-list cursor to reach
-        # their album. Prioritize up to three markers without changing the cap.
+        # their album. Prioritize one marker without changing the cap.
         if self.app == "lidarr" and self.audio and self.sources != "soulseek":
             priority = 0
             for marker in (self.config/"extended/soulseek/fallback").glob("*"):
@@ -411,7 +411,7 @@ class Worker:
                 priority_markers[ident] = marker
                 page_ids.add(ident)
                 priority += 1
-                if priority >= 3:
+                if priority >= 1:
                     break
         targets = {t["id"]: t for t in self.targets(records)}
         for ident, marker in priority_markers.items():
@@ -462,7 +462,7 @@ class Worker:
                 continue
             try:
                 if state == "waiting":
-                    if searches >= 3 or active >= 3 or not self.ready(row, target):
+                    if searches >= 1 or active >= 1 or not self.ready(row, target):
                         with self.db:
                             self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
                         continue
