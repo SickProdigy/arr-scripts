@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-scriptVersion="1.10"
+scriptVersion="1.11"
 scriptName="BeetsTagger"
 
 #### Import Settings
@@ -68,8 +68,11 @@ ProcessWithBeets () {
 	sleep 0.5
 
         log "$1 :: Begin matching with beets!"
-	BEETSDIR=/config/extended beet -c /config/extended/beets-config-lidarr.yaml -l /config/extended/library-lidarr.blb -d "$1" import -qC "$1" 2>&1 | tee -a "/config/logs/$logFileName"
+	BEETSDIR=/config/extended beet -P lyrics -c /config/extended/beets-config-lidarr.yaml -l /config/extended/library-lidarr.blb -d "$1" import -qC "$1" 2>&1 | tee -a "/config/logs/$logFileName"
 	beetsImportStatus=${PIPESTATUS[0]}
+	if [ "$beetsImportStatus" = "0" ]; then
+		bash /config/extended/BeetsLyrics.bash /config/extended/beets-config-lidarr.yaml /config/extended/library-lidarr.blb "$1" 2>&1 | tee -a "/config/logs/$logFileName"
+	fi
 	# Fix tags
 	log "$1 :: Fixing Tags..."
 		

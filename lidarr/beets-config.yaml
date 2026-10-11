@@ -6,7 +6,8 @@ id3v23: no
 asciify_paths: true
 
 lyrics:
-    auto: yes
+    auto: no
+    force: no
     # Prefer synchronized providers. Genius is plain-text only and its shared
     # API rate limit can stall large imports through repeated HTTP 429 retries.
     sources: [lrclib, lrcmux]

@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.16"
+scriptVersion="1.4.17"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -26,6 +26,7 @@ apk add -U --upgrade --no-cache \
   jq \
   xq \
   git \
+  coreutils \
   gcc \
   ffmpeg \
   imagemagick \
@@ -45,7 +46,7 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   jellyfish \
   beautifulsoup4 \
   yt-dlp \
-  beets \
+  "beets[lyrics]" \
   yq \
   pyxDamerauLevenshtein \
   pyacoustid \
@@ -110,6 +111,9 @@ chmod +x /custom-services.d/MusicBrainzGenres
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Ratings.bash" -o /config/extended/Ratings.bash
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Ratings.service.bash" -o /custom-services.d/Ratings
 chmod +x /custom-services.d/Ratings
+curl -sfL "${arrScriptsRawBase%/}/lidarr/BeetsLyrics.bash" -o /config/extended/BeetsLyrics.bash
+mkdir -p /config/extended/python
+curl -sfL "${arrScriptsRawBase%/}/lidarr/python/BeetsLyrics.py" -o /config/extended/python/BeetsLyrics.py
 
 
 if [ ! -f /config/extended/beets-config.yaml ]; then

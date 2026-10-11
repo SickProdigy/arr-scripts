@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.50"
+scriptVersion="2.51"
 scriptName="Audio"
 
 ### Import Settings
@@ -769,7 +769,7 @@ DownloadProcess () {
 	# Embed Lyrics into Flac files
 	find "$audioPath/incomplete" -type f -iname "*.flac" -print0 | while IFS= read -r -d '' file; do
 		lrcFile="${file%.*}.lrc"
-		if [ -f "$lrcFile" ]; then
+		if [ -s "$lrcFile" ] && ! metaflac --export-tags-to=- "$file" | grep -qiE '^(lyrics|syncedlyrics)=.+'; then
 			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Embedding lyrics (lrc) into $file"
 			metaflac --remove-tag=Lyrics "$file"
 			metaflac --set-tag-from-file="Lyrics=$lrcFile" "$file"
@@ -971,7 +971,8 @@ ProcessWithBeets () {
 	touch "/config/beets-match"
 	sleep 0.5
 
-	beet -c /config/extended/beets-config.yaml -l /config/extended/beets-library.blb -d "$1" import -qC "$1"
+	beet -P lyrics -c /config/extended/beets-config.yaml -l /config/extended/beets-library.blb -d "$1" import -qC "$1"
+	beetsImportStatus=$?
 	if [ $(find "$1" -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" -newer "/config/beets-match" | wc -l) -gt 0 ]; then
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: SUCCESS: Matched with beets!"
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: fixing track tags" 
@@ -1007,6 +1008,10 @@ ProcessWithBeets () {
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Unable to match using beets to a musicbrainz release..."
 		return
 	fi	
+
+	if [ "${beetsImportStatus:-1}" = "0" ]; then
+		bash /config/extended/BeetsLyrics.bash /config/extended/beets-config.yaml /config/extended/beets-library.blb "$1" 2>&1 | tee -a "/config/logs/$logFileName"
+	fi
 
 	if [ -f "/config/beets-match" ]; then 
 		rm "/config/beets-match"
