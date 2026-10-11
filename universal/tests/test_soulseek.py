@@ -170,6 +170,68 @@ class WorkerTests(unittest.TestCase):
             self.tick()
         return next(iter(self.slsk.batches))
 
+    def test_failed_candidate_skipped_and_cached_alternative_survives_restart(self):
+        self.tick()
+        data = json.loads(self.row()["data"])
+        first = dict(username="first",files=[dict(filename="album/song.flac",size=4)])
+        second = dict(username="second",files=[dict(filename="album/song.flac",size=4)])
+        data.update(first,batch=str(soulseek.uuid.uuid4()),candidates=[first,second])
+        self.worker.fail_candidate(1,data,"import rejected")
+        self.worker.db.close()
+        self.worker = soulseek.Worker("radarr",self.arr,self.slsk,self.root,self.root,delay=0,clock=lambda:self.now)
+        saved = json.loads(self.row()["data"])
+        self.worker.next_candidate(1,saved)
+        next_data = json.loads(self.row()["data"])
+        self.assertEqual(next_data["username"],"second")
+        self.assertEqual(next_data["search"],data["search"])
+        self.assertNotEqual(next_data["batch"],data["batch"])
+
+    def test_exhaustion_waits_and_folder_exclusion_expires(self):
+        self.tick()
+        candidate = dict(username="peer",files=[dict(filename="album/song.flac",size=4)])
+        data = dict(candidate,batch=str(soulseek.uuid.uuid4()),candidates=[candidate])
+        self.worker.fail_candidate(1,data,"failed transfer")
+        same_folder = dict(username="peer",files=[dict(filename="album/song.mp3",size=3)])
+        self.assertTrue(self.worker.excluded(1,same_folder))
+        self.worker.next_candidate(1,data)
+        self.assertEqual(self.row()["state"],"waiting")
+        self.assertEqual(self.row()["next_run"],self.now+7*86400)
+        self.now += 7*86400+1
+        self.assertFalse(self.worker.excluded(1,candidate))
+
+    def test_failed_cleanup_retains_files_when_client_is_active(self):
+        self.tick()
+        batch = str(soulseek.uuid.uuid4())
+        folder = self.root/batch
+        folder.mkdir()
+        source = folder/"Movie.mkv"
+        source.write_bytes(b"test")
+        data = dict(batch=batch,destination=batch,username="peer",files=[dict(filename="Movie.mkv",size=4)])
+        self.worker.fail_candidate(1,data,"failed transfer")
+        self.slsk.client = "nicotine"
+        with patch.object(self.slsk,"call",side_effect=soulseek.ApiError(409)):
+            with self.assertRaises(soulseek.ApiError):
+                self.worker.failed_cleanup(1,data,[])
+        self.assertTrue(source.exists())
+        self.assertEqual(self.row()["state"],"failure_cleanup")
+
+    def test_failed_cleanup_clears_client_before_file_removal(self):
+        self.tick()
+        batch = str(soulseek.uuid.uuid4())
+        folder = self.root/batch
+        folder.mkdir()
+        source = folder/"Movie.mkv"
+        source.write_bytes(b"test")
+        data = dict(batch=batch,destination=batch,username="peer",files=[dict(filename="Movie.mkv",size=4)],candidates=[])
+        self.slsk.client = "nicotine"
+        def clear(path,payload):
+            self.assertTrue(source.exists())
+            self.assertTrue(path.endswith("/clear"))
+        with patch.object(self.slsk,"call",side_effect=clear):
+            self.worker.failed_cleanup(1,data,[])
+        self.assertFalse(source.exists())
+        self.assertEqual(self.row()["state"],"waiting")
+
     def test_version_and_disconnection_prevent_searches(self):
         self.slsk.version = "0.25.1"
         self.tick()
@@ -654,6 +716,7 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(len(self.arr.commands),1)
 
     def test_handoff_job_blocks_next_album_and_removal_does_not_republish(self):
+        self.data["username"] = "test-peer"
         self.worker.handoff(self.target,self.data,self.folder)
         original = self.arr.call
         def call(path,data=None,**query):
@@ -678,7 +741,7 @@ class HandoffTests(unittest.TestCase):
         with self.worker.db:
             self.worker.db.execute("UPDATE jobs SET next_run=0")
         self.worker.tick()
-        self.assertEqual(self.worker.db.execute("SELECT state FROM jobs WHERE id=1").fetchone()[0],"discarded")
+        self.assertEqual(self.worker.db.execute("SELECT state FROM jobs WHERE id=1").fetchone()[0],"failure_cleanup")
         self.assertFalse(published.exists())
 
 

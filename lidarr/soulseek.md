@@ -76,8 +76,8 @@ native download refresh; it does not submit a competing direct import.
 Soulseek albums appear in **Activity -> Queue** when ready for Lidarr, like
 Tidal/Deezer. Successfully imported albums disappear. Rejected albums remain
 available for manual import or removal with **delete files** selected. The
-single Soulseek slot remains occupied until you resolve that album, preventing
-a stack of additional rejected downloads. Tidal and Deezer continue separately.
+single Soulseek slot remains occupied until import or coordinated rejection
+recovery finishes, preventing a stack of additional rejected downloads. Tidal and Deezer continue separately.
 The blackhole client does not report Nicotine's live transfer/start status.
 
 Folders use `Artist-Album (Year) [Soulseek]` unless Lidarr recognizes an existing
@@ -124,3 +124,33 @@ an exact measured bitrate. Quality/conversion failures are retained for review.
 Peer attributes remain hints, not proof of the original recording's fidelity.
 Settings are saved with each new search so active batches retain their policy.
 These audio settings do not affect Sonarr or Radarr.
+
+
+## Failed candidates and retries
+
+A failed copy is identified by the album, peer, and remote folder, rather than
+banning the entire peer or giving up on the album. The worker records a local
+failure reason and excludes that candidate for `failedDownloadRetryDays`
+(default 7 days). Cached alternatives from the same search are tried in quality
+order without another search. If those alternatives are exhausted, the album
+waits for that failure cooldown before searching again. An initial search with
+no suitable candidate waits `retryNotFound` (default 90 days). Timers apply to
+albums, so other albums by the same artist can still be searched.
+
+Nicotine API plugin **0.1.2+** is required for coordinated cleanup. It clears
+only terminal transfer rows belonging to the recorded batch and never deletes
+files itself. Active/queued transfers or ownership conflicts pause recovery;
+no alternative batch is started while cleanup remains unresolved. Upgrade the
+plugin and disable/re-enable it before updating these scripts.
+
+QueueCleaner skips Soulseek-owned handoffs. The worker records completed import
+warnings, clears the client batch, removes the matching Lidarr queue entry and
+owned files, then selects the next candidate. Successful handoffs also clear
+Nicotine's completed rows before removing original batch files. Unsupported
+client cleanup (including the current slskd adapter) retains the job/files for
+review instead of guessing at removal. Other download clients retain their
+existing native queue-cleaner behavior; this does not introduce a new retry
+engine for qBittorrent or NZB clients.
+
+Previously discarded jobs remain discarded; this update does not invent lost
+peer/folder identities or automatically retry manually removed jobs.

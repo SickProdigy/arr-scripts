@@ -7,6 +7,7 @@ Persist intent before remote writes and reconcile batches after uncertain replie
 from __future__ import annotations
 
 import argparse
+import hashlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -55,9 +56,12 @@ class Api:
         self.url, self.key = url.rstrip("/"), key
         self.opener = build_opener(NoRedirect())
 
-    def call(self, path, data=None, **query):
+    def delete(self, path, **query):
+        return self.call(path, method="DELETE", **query)
+
+    def call(self, path, data=None, method=None, **query):
         suffix = "?" + urlencode(query) if query else ""
-        request = Request(self.url + "/" + path + suffix,
+        request = Request(self.url + "/" + path + suffix, method=method,
                           data=json.dumps(data).encode() if data is not None else None,
                           headers={"X-API-Key": self.key, "Content-Type": "application/json"})
         try:
@@ -105,7 +109,7 @@ def safe_remote(name):
     return bool(parts) and not any(p in ("..", ".") for p in parts) and "\x00" not in name and not re.search(r'[<>:"|?*]', PureWindowsPath(name).name)
 
 
-def choose_files(target, responses, policy=None):
+def choose_files(target, responses, policy=None, all_candidates=False):
     policy = (policy or AudioPolicy()) if target["app"] == "lidarr" else None
     """Conservative identities; the Arr import decision remains authoritative."""
     candidates = []
@@ -166,7 +170,7 @@ def choose_files(target, responses, policy=None):
     candidates.sort(key=lambda pair: (policy.choose_rank(pair[1]) if target["app"] == "lidarr" else (0,),
                                       pair[0].get("queueLength", 0), -pair[0].get("uploadSpeed", 0),
                                       pair[0]["username"], pair[1][0]["filename"]))
-    return candidates[0] if candidates else None
+    return candidates if all_candidates else candidates[0] if candidates else None
 
 
 def import_payload(app, target, decisions, folder):
@@ -207,7 +211,9 @@ def import_payload(app, target, decisions, folder):
 
 
 class Worker:
-    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None):
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=7, notfound_days=90):
+        self.retry_seconds = max(0, int(retry_days))*86400
+        self.notfound_seconds = max(0, int(notfound_days))*86400
         self.audio_policy = (audio_policy or AudioPolicy()) if app == "lidarr" else None
         self.imports = Path(imports) if imports else None
         self.app, self.arr, self.slsk = app, arr, slsk
@@ -221,7 +227,82 @@ class Worker:
         self.db.execute("CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, target TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'waiting', first_seen REAL NOT NULL, next_run REAL NOT NULL DEFAULT 0, data TEXT NOT NULL DEFAULT '{}')")
         self.db.execute("CREATE TABLE IF NOT EXISTS scan (id INTEGER PRIMARY KEY CHECK(id=1), page INTEGER NOT NULL)")
         self.db.execute("INSERT OR IGNORE INTO scan(id,page) VALUES(1,1)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS failed_candidates (id INTEGER NOT NULL, fingerprint TEXT NOT NULL, expires REAL NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(id,fingerprint))")
         self.db.commit()
+
+    @staticmethod
+    def candidate_key(username, files):
+        folders = sorted({str(PureWindowsPath(f["filename"]).parent).casefold() for f in files})
+        return hashlib.sha256(json.dumps([username, folders]).encode()).hexdigest()
+
+    def excluded(self, ident, candidate):
+        key = self.candidate_key(candidate["username"], candidate["files"])
+        row = self.db.execute("SELECT expires FROM failed_candidates WHERE id=? AND fingerprint=?", (ident,key)).fetchone()
+        return bool(row and row[0] > self.clock())
+
+    def fail_candidate(self, ident, data, reason):
+        data["attempted"] = True
+        key = self.candidate_key(data["username"], data["files"])
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO failed_candidates VALUES(?,?,?,?)", (ident,key,self.clock()+self.retry_seconds,reason))
+        self.save(ident, "failure_cleanup", {**data,"reason":reason,"attempted":True})
+
+    def next_candidate(self, ident, data):
+        data = dict(data)
+        data["attempted"] = data.get("attempted", False) or "reason" in data
+        candidates = list(data.get("candidates", []))
+        while candidates:
+            candidate = candidates.pop(0)
+            names = [PureWindowsPath(f["filename"]).name.casefold() for f in candidate["files"]]
+            if len(names) != len(set(names)) or self.excluded(ident, candidate):
+                continue
+            next_data = {k:data[k] for k in ("search","audioPolicy","attempted") if k in data}
+            next_data.update(candidate, candidates=candidates, batch=str(uuid.uuid4()))
+            next_data["destination"] = next_data["batch"]
+            self.save(ident, "enqueueing", next_data)
+            return
+        self.save(ident, "waiting", {}, self.retry_seconds if data.get("attempted") else self.notfound_seconds)
+
+    def clear_client_batch(self, data):
+        if getattr(self.slsk,"client","slskd") != "nicotine":
+            raise ValueError("Client batch cleanup unavailable; retained for review")
+        self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}/clear", {})
+
+    def failed_cleanup(self, ident, data, queue):
+        # Client clears only this owned batch, rejecting any queued/active transfer.
+        self.clear_client_batch(data)
+        folder = self.batch_folder(data)
+        sources = []
+        for file in data["files"]:
+            path = folder/PureWindowsPath(file["filename"]).name
+            if path.is_symlink():
+                raise ValueError("Symlinked failed file")
+            if path.exists():
+                if not path.is_file() or path.stat().st_nlink != 1 or path.stat().st_size > file["size"]:
+                    raise ValueError("Failed source changed; retained")
+                sources.append(path)
+        if "handoff" in data:
+            handed = Path(data["handoff"])
+            if not self.imports or handed.parent.resolve() != self.imports.resolve() or handed.is_symlink():
+                raise ValueError("Invalid failed handoff")
+            if handed.exists():
+                marker = handed/".arr-soulseek.json"
+                if marker.is_symlink() or json.loads(marker.read_text()) != {"batch":data["batch"],"app":self.app,"id":ident}:
+                    raise ValueError("Failed handoff ownership mismatch")
+                for file in data.get("importFiles",data["files"]):
+                    path = handed/PureWindowsPath(file["filename"]).name
+                    if path.is_symlink() or (path.exists() and (not path.is_file() or path.stat().st_size != file["size"] or path.stat().st_nlink != 1)):
+                        raise ValueError("Failed handoff changed; retained")
+                    if path.exists(): sources.append(path)
+                sources.append(marker)
+            owned = [entry for entry in queue if entry.get("outputPath") == data["handoff"]]
+            for entry in owned:
+                self.arr.delete(self.prefix+f"queue/{entry['id']}", removeFromClient="false",blocklist="false")
+        for path in sources:
+            path.unlink(missing_ok=True)
+        for directory in (folder, Path(data["handoff"]) if "handoff" in data else folder):
+            if directory.is_dir() and not any(directory.iterdir()): directory.rmdir()
+        self.next_candidate(ident,data)
 
     def save(self, ident, state, data, wait=0):
         with self.db:
@@ -231,7 +312,8 @@ class Worker:
     def pages(self, endpoint):
         page = 1
         while True:
-            value = self.arr.call(self.prefix+endpoint, page=page, pageSize=100, sortKey="id", sortDirection="ascending")
+            value = self.arr.call(self.prefix+endpoint, page=page, pageSize=100, sortKey="id", sortDirection="ascending",
+                                  **({"includeUnknownArtistItems":"true"} if self.app == "lidarr" and endpoint == "queue" else {}))
             records = value["records"]
             yield from records
             if page*100 >= value["totalRecords"] or not records:
@@ -375,6 +457,8 @@ class Worker:
                 raise ValueError("Library file is still in import root")
             if not path.is_file() or path.stat().st_size <= 0:
                 raise ValueError("Library file unavailable")
+        if getattr(self.slsk,"client","slskd") == "nicotine":
+            self.clear_client_batch(data)
         sources = []
         for file in data["files"]:
             name = file["filename"]
@@ -466,6 +550,8 @@ class Worker:
             data["importTarget"] = target
             self.save(target["id"], "publishing", data)
             os.rename(staging,destination)
+        if getattr(self.slsk,"client","slskd") == "nicotine":
+            self.clear_client_batch(data)
         data["handoff"] = str(destination)
         data["importTarget"] = target
         # Persist the handoff before asking Arr to refresh. The worker must not
@@ -556,6 +642,8 @@ class Worker:
                     if not path.is_file() or info.st_size > file["size"] or info.st_nlink != 1:
                         raise ValueError("Source file changed or shared; retained")
                     sources.append(path)
+        if "batch" in data and getattr(self.slsk,"client","slskd") == "nicotine":
+            self.clear_client_batch(data)
         for path in sources:
             path.unlink()
         if folder and folder.is_dir() and not any(folder.iterdir()):
@@ -645,12 +733,18 @@ class Worker:
                                   row["id"] not in priority_markers,
                                   row["first_seen"], row["id"]))
         searches = 0
-        active = self.db.execute("SELECT count(*) FROM jobs WHERE state IN ('searching','enqueueing','downloading','downloaded','importing','handoff','publishing')").fetchone()[0]
+        active = self.db.execute("SELECT count(*) FROM jobs WHERE state IN ('searching','enqueueing','downloading','downloaded','importing','handoff','publishing','failure_cleanup')").fetchone()[0]
         for row in rows:
             ident, state, data = row["id"], row["state"], json.loads(row["data"])
             target = targets.get(ident)
+            if state == "failure_cleanup" and target is not None:
+                try:
+                    self.failed_cleanup(ident,data,queue)
+                except (ApiError,ValueError,KeyError,TypeError,OSError):
+                    self.save(ident,"failure_cleanup",data,300)
+                continue
             if target is None:
-                if state in ("importing", "cleanup", "handoff", "publishing"):
+                if state in ("importing", "cleanup", "handoff", "publishing", "failure_cleanup"):
                     try:
                         original = data.get("importTarget", json.loads(row["target"]))
                         if "handoff" in data:
@@ -689,18 +783,10 @@ class Worker:
                         raise
                     if not result.get("isComplete"):
                         continue
-                    choice = choose_files(target, result.get("responses", []), AudioPolicy(**data.get("audioPolicy", self.audio_policy.config)) if self.app == "lidarr" else None)
-                    if not choice:
-                        self.save(ident, "waiting", {}, 86400)
-                        continue
-                    peer, files = choice
-                    names = [PureWindowsPath(f["filename"]).name.casefold() for f in files]
-                    if len(names) != len(set(names)):
-                        self.save(ident, "review", {"reason": "duplicate basenames"})
-                        continue
-                    data.update(batch=str(uuid.uuid4()), username=peer["username"], files=[{"filename": f["filename"], "size": f["size"]} for f in files])
-                    data["destination"] = data["batch"]
-                    self.save(ident, "enqueueing", data)
+                    choices = choose_files(target, result.get("responses", []), AudioPolicy(**data.get("audioPolicy", self.audio_policy.config)) if self.app == "lidarr" else None, all_candidates=True)
+                    data["candidates"] = [{"username":peer["username"], "files":[{"filename":f["filename"],"size":f["size"]} for f in files]} for peer,files in choices]
+                    self.next_candidate(ident,data)
+                    continue
                 elif state == "enqueueing":
                     try:
                         self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}")
@@ -722,7 +808,7 @@ class Worker:
                     elif all(f["state"] == "Completed, Succeeded" for f in transfers):
                         self.save(ident, "downloaded", data)
                     elif any("Completed" in f["state"] and "Succeeded" not in f["state"] for f in transfers):
-                        self.save(ident, "review", {**data, "reason": "failed transfer"})
+                        self.fail_candidate(ident,data,"failed transfer") if getattr(self.slsk,"client","slskd") == "nicotine" else self.save(ident,"review",{**data,"reason":"failed transfer"})
                 elif state in ("downloaded","publishing"):
                     folder = self.batch_folder(data)
                     if not folder.is_dir():
@@ -748,9 +834,11 @@ class Worker:
                 elif state == "handoff":
                     owned = [entry for entry in queue if entry.get("outputPath") == data["handoff"]]
                     if owned:
-                        continue  # Lidarr owns import, removal, and manual retry.
+                        if any(entry.get("status") == "completed" and entry.get("trackedDownloadStatus") == "warning" for entry in owned):
+                            self.fail_candidate(ident,data,"Lidarr rejected completed import")
+                        continue
                     if not Path(data["handoff"]).exists():
-                        self.save(ident, "discarded", {"reason":"removed from Lidarr before import"})
+                        self.fail_candidate(ident,data,"handoff removed before import")
                     # It may not be visible until the next native queue refresh.
                 elif state == "importing":
                     if "command" not in data:
@@ -805,7 +893,7 @@ def main():
                 row = connection.execute("SELECT state FROM jobs WHERE id=?", (args.owns,)).fetchone()
         except sqlite3.Error:
             raise SystemExit(0)  # Unreadable state: avoid racing an uncertain job.
-        raise SystemExit(0 if row and row[0] in ("searching", "enqueueing", "downloading", "downloaded", "importing", "handoff", "publishing") else 1)
+        raise SystemExit(0 if row and row[0] in ("searching", "enqueueing", "downloading", "downloaded", "importing", "handoff", "publishing", "failure_cleanup") else 1)
     app = os.environ["SOULSEEK_APP"]
     if app not in ("lidarr", "sonarr", "radarr"):
         raise ValueError("Unsupported Arr application")
@@ -849,6 +937,7 @@ def main():
         worker = Worker(app, Api(url, key), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
                         os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true",
+                        retry_days=os.environ.get("SOULSEEK_FAILED_RETRY_DAYS","7"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
                         audio_policy=AudioPolicy(os.environ.get("SOULSEEK_AUDIO_FORMAT", "native"), os.environ.get("SOULSEEK_AUDIO_BITRATE", "master"), os.environ.get("SOULSEEK_REQUIRE_QUALITY") == "true") if app == "lidarr" else None,
                         imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None)
         try:

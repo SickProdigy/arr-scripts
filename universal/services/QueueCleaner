@@ -74,6 +74,22 @@ QueueCleanerProcess () {
         arrQueueItemData=$(echo "$arrQueueData" | jq -r "select(.id==$queueId)")
         arrQueueItemTitle=$(echo "$arrQueueItemData" | jq -r .title)
 
+        # Soulseek owns rejection recovery and coordinated client cleanup.
+        if [ "$arrApp" == "lidarr" ]; then
+            queueOutputPath=$(echo "$arrQueueItemData" | jq -r '.outputPath // empty')
+            if [ -n "$queueOutputPath" ] && [ -f "$queueOutputPath/.arr-soulseek.json" ]; then
+                log "$queueId ($arrQueueItemTitle) :: Soulseek-owned handoff; skipping."
+                continue
+            fi
+            albumId=$(echo "$arrQueueItemData" | jq -r '.albumId // empty')
+            if [[ "$albumId" =~ ^[0-9]+$ ]] && [ -f /config/extended/python/Soulseek.py ]; then
+                if SOULSEEK_CONFIG_DIR=/config python3 /config/extended/python/Soulseek.py --owns "$albumId"; then
+                    log "$queueId ($arrQueueItemTitle) :: Soulseek owns recovery; skipping."
+                    continue
+                fi
+            fi
+        fi
+
         # Sonarr episode handling (unchanged)
         if [ "$arrApp" == "sonarr" ]; then
             arrEpisodeId=$(echo "$arrQueueItemData" | jq -r .episodeId)
