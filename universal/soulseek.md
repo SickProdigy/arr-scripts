@@ -25,7 +25,7 @@ Start with the application guide for your configuration:
 Install the `api` directory from the plugin repository, then enable
 **Soulseek HTTP API** in Nicotine's plugin preferences. Set an API key of at
 least 32 random characters. For separate containers, use listen address
-`0.0.0.0` and port `12339`; the default `127.0.0.1` cannot accept connections
+`0.0.0.0` (the plugin default) and port `12339`; `127.0.0.1` cannot accept connections
 from Arr's container. Use a private Docker network shared with Arr.
 
 The **Completed download root** is an absolute path inside Nicotine. Use a
