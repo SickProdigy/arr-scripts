@@ -37,7 +37,55 @@ fi
 if [ "$configureCustomScripts" == "true" ] || [ -z "$configureCustomScripts" ]; then
 	log "Configuring Lidarr Custom Scripts"
 	notificationData=$(curl -s "$arrUrl/api/v1/notification" -H "X-Api-Key: ${arrApiKey}")
+	genreNotificationIds=$(echo "$notificationData" | jq -r '.[] | select(.name=="MusicBrainzGenres.bash") | .id')
+	if [ "${enableMusicBrainzHelper:-false}" != "true" ]; then
+		for genreNotificationId in $genreNotificationIds; do
+			curl -s "$arrUrl/api/v1/notification/$genreNotificationId" -X DELETE -H "X-Api-Key: ${arrApiKey}" >/dev/null
+		done
+	else
+		log "Configuring MusicBrainzGenres.bash for imports, upgrades and retags"
+		genreNotification=$(jq -n '{name:"MusicBrainzGenres.bash", implementation:"CustomScript",
+			implementationName:"Custom Script", configContract:"CustomScriptSettings",
+			onGrab:false, onReleaseImport:true, onUpgrade:true, onRename:false,
+			onHealthIssue:false, onDownloadFailure:false, onImportFailure:false,
+			onTrackRetag:true, onApplicationUpdate:false,
+			fields:[{name:"path",value:"/config/extended/MusicBrainzGenres.bash"},{name:"arguments",value:""}],tags:[]}')
+		genreNotificationMethod="POST"
+		genreNotificationEndpoint="$arrUrl/api/v1/notification"
+		genreNotificationId=$(echo "$genreNotificationIds" | head -n 1)
+		if [ -n "$genreNotificationId" ]; then
+			genreNotificationMethod="PUT"
+			genreNotificationEndpoint="$genreNotificationEndpoint/$genreNotificationId"
+			genreNotification=$(echo "$genreNotification" | jq --argjson id "$genreNotificationId" '. + {id:$id}')
+		fi
+		curl -sf "$genreNotificationEndpoint" -X "$genreNotificationMethod" -H 'Content-Type: application/json' \
+			-H "X-Api-Key: ${arrApiKey}" --data "$genreNotification" >/dev/null || log "MusicBrainz genre notification registration failed"
+	fi
 	plexNotificationId=$(echo "$notificationData" | jq -r '.[] | select(.name=="PlexNotify.bash") | .id' | head -n 1)
+	ratingsNotificationIds=$(echo "$notificationData" | jq -r '.[] | select(.name=="Ratings.bash") | .id')
+	if [ "${enableRatings:-false}" != "true" ]; then
+		for ratingsNotificationId in $ratingsNotificationIds; do
+			curl -s "$arrUrl/api/v1/notification/$ratingsNotificationId" -X DELETE -H "X-Api-Key: ${arrApiKey}" >/dev/null
+		done
+	else
+		log "Configuring Ratings.bash for imports, upgrades and retags"
+		ratingsNotification=$(jq -n '{name:"Ratings.bash", implementation:"CustomScript",
+			implementationName:"Custom Script", configContract:"CustomScriptSettings",
+			onGrab:false, onReleaseImport:true, onUpgrade:true, onRename:false,
+			onHealthIssue:false, onDownloadFailure:false, onImportFailure:false,
+			onTrackRetag:true, onApplicationUpdate:false,
+			fields:[{name:"path",value:"/config/extended/Ratings.bash"},{name:"arguments",value:""}],tags:[]}')
+		ratingsNotificationMethod="POST"
+		ratingsNotificationEndpoint="$arrUrl/api/v1/notification"
+		ratingsNotificationId=$(echo "$ratingsNotificationIds" | head -n 1)
+		if [ -n "$ratingsNotificationId" ]; then
+			ratingsNotificationMethod="PUT"
+			ratingsNotificationEndpoint="$ratingsNotificationEndpoint/$ratingsNotificationId"
+			ratingsNotification=$(echo "$ratingsNotification" | jq --argjson id "$ratingsNotificationId" '. + {id:$id}')
+		fi
+		curl -sf "$ratingsNotificationEndpoint" -X "$ratingsNotificationMethod" -H 'Content-Type: application/json' \
+			-H "X-Api-Key: ${arrApiKey}" --data "$ratingsNotification" >/dev/null || log "Rating notification registration failed"
+	fi
 	if [ "$enablePlexNotify" != "true" ] || [ -z "$plexUrl" ] || [ -z "$plexToken" ]; then
 		if [ "$enablePlexNotify" == "true" ]; then
 			log "PlexNotify.bash is enabled but plexUrl or plexToken is empty; skipping registration"

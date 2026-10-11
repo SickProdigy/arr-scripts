@@ -174,3 +174,19 @@ For source and updates, visit the [repository](https://gitea.rcs1.top/sickprodig
 * [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 * [SMA Conversion/Tagging Automation Script](https://github.com/mdhiggins/sickbeard_mp4_automator)
 * [Freyr](https://github.com/miraclx/freyr-js)
+## MusicBrainz helper
+
+See [MusicBrainz helper setup](musicbrainz-genres.md) to contribute genres
+from imported Tidal/Deezer files or Beets to release groups, release editions and
+recordings. Set `enableMusicBrainzHelper="true"` and your MusicBrainz credentials
+in `extended.conf`; the normal installer includes the helper and background worker.
+
+## Ratings automation
+
+Works with any Subsonic/Navidrome server supporting the browsing, personal-rating
+and authentication APIs described in the setup guide.
+
+See [integrated ratings](ratings.md) to rate new imports after Beets and synchronize
+later Subsonic/Navidrome rating changes to MusicBrainz. Setup installs pinned SonicRatings engine
+and musicbrainz-helper packages; arr-scripts owns their automation hooks. Supply a Last.fm key for SonicRatings
+scoring, or leave it empty to use MusicBrainz community ratings locally.

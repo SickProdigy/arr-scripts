@@ -69,6 +69,7 @@ ProcessWithBeets () {
 
         log "$1 :: Begin matching with beets!"
 	BEETSDIR=/config/extended beet -c /config/extended/beets-config-lidarr.yaml -l /config/extended/library-lidarr.blb -d "$1" import -qC "$1" 2>&1 | tee -a "/config/logs/$logFileName"
+	beetsImportStatus=${PIPESTATUS[0]}
 	# Fix tags
 	log "$1 :: Fixing Tags..."
 		
@@ -118,4 +119,10 @@ ProcessWithBeets () {
 }
 
 ProcessWithBeets "$getFolderPath"
+if [ "${beetsImportStatus:-1}" = "0" ] && [ -f /config/extended/MusicBrainzGenres.bash ]; then
+	bash /config/extended/MusicBrainzGenres.bash --after-beets "$lidarr_album_id"
+fi
+if [ "${beetsImportStatus:-1}" = "0" ] && [ -f /config/extended/Ratings.bash ]; then
+	bash /config/extended/Ratings.bash --after-beets "$lidarr_album_id"
+fi
 exit
