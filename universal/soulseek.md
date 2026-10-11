@@ -118,7 +118,12 @@ quality/language/custom-format decisions happen after downloading and may reject
 the result. Native import notifications continue to run configured Arr scripts.
 
 Jobs live in `/config/extended/soulseek/jobs.sqlite`. A process lock prevents
-overlapping workers. At most three jobs actively search/download/import per
+overlapping workers. For a read-only connection and wanted-list check, run
+`ARR_SOULSEEK_APP=lidarr bash /config/extended/Soulseek.bash --diagnose`
+(replace the app as needed). This bypasses the worker lock, prints no credentials,
+and does not start searches or downloads.
+
+At most three jobs actively search/download/import per
 application. Search misses wait one day; API failures defer for five minutes.
 Searches and download batches have durable IDs; uncertain download requests are
 reconciled rather than blindly submitted again.

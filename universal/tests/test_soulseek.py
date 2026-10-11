@@ -90,6 +90,8 @@ class Arr:
     def call(self, path, data=None, **query):
         if path.endswith("movie"):
             return self.movies
+        if path.endswith("wanted/missing"):
+            return {"records": self.movies, "totalRecords": len(self.movies)}
         if path.endswith("movie/1"):
             return self.movies[0]
         if path.endswith("queue"):
@@ -173,6 +175,22 @@ class WorkerTests(unittest.TestCase):
         self.slsk.connected = False
         self.tick()
         self.assertFalse(self.slsk.posts)
+
+    def test_diagnostic_bypasses_lock_and_never_submits_searches(self):
+        import os
+        import io
+        from contextlib import redirect_stdout
+        environment = {"SOULSEEK_APP": "radarr", "SOULSEEK_ARR_URL": "http://arr", "SOULSEEK_ARR_API_KEY": "test-key",
+                       "SOULSEEK_URL": "http://client", "SOULSEEK_API_KEY": "test-key", "SOULSEEK_DOWNLOAD_PATH": str(self.root)}
+        output = io.StringIO()
+        with patch.dict(os.environ, environment), patch('sys.argv', ['Soulseek.py', '--diagnose']), \
+                patch.object(soulseek, 'Api', return_value=self.arr), patch.object(soulseek, 'SoulseekApi', return_value=self.slsk), \
+                patch.object(soulseek, 'worker_lock', side_effect=AssertionError('must not acquire lock')), redirect_stdout(output):
+            soulseek.main()
+        self.assertIn('Arr wanted/missing total: 1', output.getvalue())
+        self.assertIn('Soulseek connected: True', output.getvalue())
+        self.assertFalse(self.slsk.posts)
+        self.assertIsNone(self.row())
 
     def test_nicotine_uses_plugin_version_and_capabilities(self):
         self.slsk.client, self.slsk.version = "nicotine", "0.1.0"

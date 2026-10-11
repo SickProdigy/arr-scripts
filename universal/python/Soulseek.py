@@ -499,6 +499,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--retry", type=int, help="Retry a reviewed job after fixing its cause")
     parser.add_argument("--owns", type=int, help="Local-only check: exit 0 if Soulseek owns this active job")
+    parser.add_argument("--diagnose", action="store_true", help="Read-only API and wanted-item diagnostics, independent of the worker lock")
     args = parser.parse_args()
     config = os.environ.get("SOULSEEK_CONFIG_DIR", "/config")
     if args.owns is not None:
@@ -525,6 +526,26 @@ def main():
     delay = int(os.environ.get("SOULSEEK_FALLBACK_DELAY", "3600"))
     if delay < 0:
         raise ValueError("Fallback delay must be nonnegative")
+    if args.diagnose:
+        slsk = SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd"))
+        print(f"Soulseek diagnostic: client={slsk.client}; download mount available", flush=True)
+        print("Client API version:", slsk.call("api/v0/application/version"), flush=True)
+        application = slsk.call("api/v0/application")
+        print("Soulseek connected:", bool((application.get("server") or {}).get("isConnected")), flush=True)
+        arr = Api(url, key)
+        prefix = "api/v1/" if app == "lidarr" else "api/v3/"
+        missing = arr.call(prefix+"wanted/missing", page=1, pageSize=5, sortKey="id", sortDirection="ascending")
+        print("Arr wanted/missing total:", missing.get("totalRecords"), flush=True)
+        for record in missing.get("records", []):
+            print("Sample item:", record["id"], "monitored:", record.get("monitored"), flush=True)
+            if app == "lidarr":
+                album = arr.call(prefix+f"album/{record['id']}")
+                selected = [r for r in album.get("releases", []) if r.get("monitored")]
+                print("  monitored releases:", len(selected), "release date:", record.get("releaseDate"), flush=True)
+                if len(selected) == 1:
+                    tracks = arr.call(prefix+"track", albumId=record["id"], albumReleaseId=selected[0]["id"])
+                    print("  tracks:", len(tracks), "missing:", sum(not t.get("hasFile") and not t.get("trackFileId") for t in tracks), flush=True)
+        return
     with worker_lock(config) as acquired:
         if not acquired:
             return
@@ -547,5 +568,6 @@ if __name__ == "__main__":
     try:
         main()
     except (ApiError, ValueError, KeyError, OSError, ET.ParseError) as error:
-        print(f"Soulseek: {type(error).__name__}; check configuration and API availability", flush=True)
+        detail = str(error) if isinstance(error, ApiError) else type(error).__name__
+        print(f"Soulseek: {detail}; check configuration and API availability", flush=True)
         raise SystemExit(1)
