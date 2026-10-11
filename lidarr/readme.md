@@ -6,12 +6,17 @@ Container: <https://docs.linuxserver.io/images/docker-lidarr>
 
 ## Installation/setup
 
+Open a linked script and save its **raw contents**, rather than the HTML page,
+when downloading it. Relative links use whichever checkout or mirror you are
+viewing; the [public GitHub mirror](https://github.com/SickProdigy/arr-scripts)
+is available for public downloads.
+
 1. Add 2 volumes to your container
    `/custom-services.d` and `/custom-cont-init.d` (do not map to the same local folder...)
    Docker Run Example:<br>
    `-v /path/to/preferred/local/folder-01:/custom-services.d`<br>
    `-v /path/to/preferred/local/folder-02:/custom-cont-init.d`
-2. Download [scripts_init.bash](https://github.com/SickProdigy/arr-scripts/blob/main/lidarr/scripts_init.bash) ([raw file](https://raw.githubusercontent.com/SickProdigy/arr-scripts/main/lidarr/scripts_init.bash)) and place it into the following folder:
+2. Download [scripts_init.bash](scripts_init.bash) and place it into the following folder:
    `/custom-cont-init.d`
 3. Start your container and wait for the application to load
 4. Optional: Customize the configuration by modifying the following file `/config/extended.conf`
@@ -167,7 +172,7 @@ The audit reports complete track+album tag coverage, partial tags, untagged file
   * Optional Telegram bot with ability to set token from the chat
   * Optional Pushover and ntfy notification upon ARL token expiration
 
-For source and updates, visit the [repository](https://gitea.rcs1.top/sickprodigy/arr-scripts).
+For source and updates, visit the [repository overview](../README.md).
 
 ### Audio & Video (Plex Example)
 

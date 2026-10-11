@@ -10,11 +10,16 @@ Container: [https://docs.linuxserver.io/images/docker-sabnzbd](https://docs.linu
 
 ## Installation
 
+Open a linked script and save its **raw contents**, rather than the HTML page,
+when downloading it. Relative links use whichever checkout or mirror you are
+viewing; the [public GitHub mirror](https://github.com/SickProdigy/arr-scripts)
+is available for public downloads.
+
 1. Add volume to your container
   `/custom-cont-init.d`
   Docker Run Example:
   `-v /path/to/preferred/local/directory:/custom-cont-init.d`
-1. Download the [script_init.bash](https://github.com/SickProdigy/arr-scripts/blob/main/sabnzbd/scripts_init.bash) ([Download Link](https://raw.githubusercontent.com/SickProdigy/arr-scripts/main/sabnzbd/scripts_init.bash)) and place it into the following folder: `/custom-cont-init.d`
+1. Download the [scripts_init.bash](scripts_init.bash) and place it into the following folder: `/custom-cont-init.d`
 1. Start your container and wait for the application to load
 1. Customize `/config/extended.conf` for your processing options and Arr connections.
 1. Add the `/config/scripts` folder to the "Scripts Folder" folder setting in SABnzbd
@@ -33,7 +38,7 @@ the initialization script in `/custom-cont-init.d`, rather than `/custom-service
 | `audiobook.bash` | Audiobook post-processing | Automatic |
 
 Choose one video script for a category. To use the alternative, save
-[video2.bash](https://raw.githubusercontent.com/SickProdigy/arr-scripts/main/sabnzbd/video2.bash)
+[video2.bash](video2.bash)
 as `/config/scripts/video2.bash`, then select it for that category. The standard
 installer does not install or update this alternative automatically.
 

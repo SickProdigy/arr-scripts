@@ -1,5 +1,7 @@
 # arr-scripts
 
+Public GitHub mirror: [SickProdigy/arr-scripts](https://github.com/SickProdigy/arr-scripts).
+
 SickProdigy's arr-scripts extends LinuxServer.io Arr containers with automated
 downloads, processing, imports, and library maintenance. It builds on
 RandomNinjaAtk's scripts, previously packaged with the Extended containers,
