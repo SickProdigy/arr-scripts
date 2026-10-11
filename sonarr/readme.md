@@ -12,7 +12,7 @@ Version Tag: develop (v4 is required for some of the features)
   Docker Run Example:
   `-v /path/to/preferred/local/folder-01:/custom-services.d`
   `-v /path/to/preferred/local/folder-02:/custom-cont-init.d`
-2. Download the [script_init.bash](https://github.com/RandomNinjaAtk/arr-scripts/blob/main/sonarr/scripts_init.bash) ([Download Link](https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/sonarr/scripts_init.bash)) and place it into the following folder: `/custom-cont-init.d`
+2. Download the [script_init.bash](https://github.com/SickProdigy/arr-scripts/blob/main/sonarr/scripts_init.bash) ([Download Link](https://raw.githubusercontent.com/SickProdigy/arr-scripts/main/sonarr/scripts_init.bash)) and place it into the following folder: `/custom-cont-init.d`
 3. After downloading, make the script executable. Example:
   chmod +x /path/to/preferred/local/folder-02/scripts_init.bash
 4. Start your container and wait for the application to load
@@ -23,7 +23,7 @@ Version Tag: develop (v4 is required for some of the features)
 
 Updating is a bit more cumbersome. To update, do the following:
 
-1. Download/update your local `/config/extended.conf` file with the latest options from: [extended.conf](https://github.com/RandomNinjaAtk/arr-scripts/blob/main/sonarr/extended.conf)
+1. Download/update your local `/config/extended.conf` file with the latest options from: [extended.conf](https://github.com/SickProdigy/arr-scripts/blob/main/sonarr/extended.conf)
 2. Restart the container, wait for it to fully load the application.
 3. Restart the container again, for the new scripts to activate.
 
@@ -36,7 +36,7 @@ Updating is a bit more cumbersome. To update, do the following:
 1. Remove any Arr app customizations manually.
 
 ## Support
-[Information](https://github.com/RandomNinjaAtk/arr-scripts/tree/main?tab=readme-ov-file#support-info)
+[Information](https://github.com/SickProdigy/arr-scripts/tree/main?tab=readme-ov-file#support-info)
 
 
 ## Features
@@ -69,7 +69,7 @@ Updating is a bit more cumbersome. To update, do the following:
 * Youtube Series Downloader Script
   * Automatically downloads and imports episodes from Youtube.com for Sonarr series that have their network set as "Youtube"
 
-For more details, visit the [Wiki](https://github.com/RandomNinjaAtk/arr-scripts/wiki)
+For more details, visit the [Wiki](https://github.com/SickProdigy/arr-scripts/wiki)
 
 ### Plex Example
 
@@ -85,3 +85,7 @@ For more details, visit the [Wiki](https://github.com/RandomNinjaAtk/arr-scripts
 * [The Movie Database](https://www.themoviedb.org/)
 * [Recyclarr](https://github.com/recyclarr/recyclarr)
 * Icons made by [Freepik](https://www.freepik.com/) from [Flaticon](https://www.flaticon.com)
+
+## Optional Soulseek downloads
+
+See [Soulseek setup and provider selection](../universal/soulseek.md) for the shared slskd downloader, fallback behavior and import requirements.

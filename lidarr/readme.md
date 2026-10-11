@@ -194,3 +194,7 @@ scoring, or leave it empty to use MusicBrainz community ratings locally.
 
 Lyrics run after metadata tagging with a bounded timeout. Existing lyrics are
 preserved; new lyrics are embedded into audio files. See [configuration and behavior](beets-lyrics.md).
+
+## Optional Soulseek downloads
+
+See [Soulseek setup and provider selection](../universal/soulseek.md) for the shared slskd downloader, fallback behavior and import requirements.

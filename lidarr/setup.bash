@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.17"
+scriptVersion="1.4.18"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -152,6 +152,15 @@ if [ ! -f /config/extended.conf ]; then
 	chmod 777 /config/extended.conf
 	echo "Done"
 fi
+
+# Shared optional Soulseek wanted-list worker (Soulseek client runs separately).
+mkdir -p /config/extended/python /custom-services.d
+soulseekRawBase="${ARR_SCRIPTS_RAW_BASE:-https://raw.githubusercontent.com/SickProdigy/arr-scripts/main}"
+curl -sfL "${soulseekRawBase%/}/universal/Soulseek.bash" -o /config/extended/Soulseek.bash || exit 1
+curl -sfL "${soulseekRawBase%/}/universal/python/Soulseek.py" -o /config/extended/python/Soulseek.py || exit 1
+curl -sfL "${soulseekRawBase%/}/universal/Soulseek.service.bash" -o /custom-services.d/Soulseek || exit 1
+sed -i 's/__APP__/lidarr/g' /custom-services.d/Soulseek
+chmod +x /custom-services.d/Soulseek
 
 chmod 777 -R /config/extended
 chmod 777 -R /root

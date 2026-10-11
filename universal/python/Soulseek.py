@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""Optional slskd wanted-list worker shared by Lidarr, Sonarr and Radarr.
+
+Uses only the Python standard library. No Soularr code or dependency is bundled.
+Persist intent before remote writes and reconcile batches after uncertain replies.
+"""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path, PureWindowsPath
+import re
+import sqlite3
+import time
+import unicodedata
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+import uuid
+import xml.etree.ElementTree as ET
+
+
+class ApiError(RuntimeError):
+    def __init__(self, status=0):
+        self.status = status
+        super().__init__(f"API HTTP {status}" if status else "API unavailable")
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # Do not forward API credentials to redirected hosts.
+
+
+class Api:
+    def __init__(self, url, key):
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.netloc or parts.username or parts.query:
+            raise ValueError("Invalid API URL")
+        if not key:
+            raise ValueError("Missing API key")
+        self.url, self.key = url.rstrip("/"), key
+        self.opener = build_opener(NoRedirect())
+
+    def call(self, path, data=None, **query):
+        suffix = "?" + urlencode(query) if query else ""
+        request = Request(self.url + "/" + path + suffix,
+                          data=json.dumps(data).encode() if data is not None else None,
+                          headers={"X-API-Key": self.key, "Content-Type": "application/json"})
+        try:
+            with self.opener.open(request, timeout=30) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else {}
+        except HTTPError as error:
+            status = error.code
+            error.close()
+            raise ApiError(status) from None
+        except (URLError, TimeoutError, OSError, ValueError):
+            raise ApiError() from None
+
+
+class SoulseekApi(Api):
+    """Keep client-specific API versions outside the matching/import worker."""
+    def __init__(self, url, key, client="slskd"):
+        if client not in ("slskd", "nicotine"):
+            raise ValueError("Select slskd or nicotine")
+        super().__init__(url, key)
+        self.client = client
+
+    def call(self, path, data=None, **query):
+        if self.client == "nicotine":
+            path = path.replace("api/v0/", "api/v1/", 1)
+        return super().call(path, data, **query)
+
+
+def normalized(value):
+    value = unicodedata.normalize("NFKD", value).casefold()
+    return " ".join(re.findall(r"[^\W_]+", value, re.UNICODE))
+
+
+def released(value, now):
+    if not value:
+        return False
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=timezone.utc).timestamp() <= now
+    except ValueError:
+        return False
+
+
+def safe_remote(name):
+    parts = PureWindowsPath(name).parts
+    return bool(parts) and not any(p in ("..", ".") for p in parts) and "\x00" not in name and not re.search(r'[<>:"|?*]', PureWindowsPath(name).name)
+
+
+def choose_files(target, responses):
+    """Conservative identities; the Arr import decision remains authoritative."""
+    candidates = []
+    for response in responses:
+        if not response.get("username") or response.get("lockedFileCount", 0) and not response.get("files"):
+            continue
+        groups = {}
+        for file in response.get("files", []):
+            name = file.get("filename", "")
+            if not safe_remote(name) or file.get("size", 0) <= 0:
+                continue
+            path = PureWindowsPath(name)
+            text = normalized(str(path))
+            if target["app"] == "lidarr":
+                if path.suffix.casefold() not in (".flac", ".mp3", ".m4a", ".opus", ".ogg"):
+                    continue
+                if normalized(target["artist"]) not in text or normalized(target["title"]) not in text:
+                    continue
+                parent = path.parent
+                if re.fullmatch(r"(?:cd|disc|disk)\s*\d+", parent.name, re.I):
+                    parent = parent.parent
+                groups.setdefault((str(parent), path.suffix.casefold()), []).append(file)
+            else:
+                if path.suffix.casefold() not in (".mkv", ".mp4", ".avi", ".m4v", ".ts"):
+                    continue
+                stem = normalized(path.stem)
+                title = normalized(target["title"])
+                if not stem.startswith(title + " ") or re.search(r"\b(?:sample|trailer)\b", stem):
+                    continue
+                if target["app"] == "radarr":
+                    if not stem[len(title):].strip().startswith(str(target["year"]) + " "):
+                        if stem[len(title):].strip() != str(target["year"]):
+                            continue
+                else:
+                    codes = re.findall(r"(?i)\bs(\d{1,2})e(\d{1,3})(?!\d|e)", path.stem)
+                    if codes != [(str(target["season"]).zfill(2), str(target["episode"]).zfill(2))]:
+                        # Accept unpadded numbers too, but reject multi-episode packs.
+                        if len(codes) != 1 or tuple(map(int, codes[0])) != (target["season"], target["episode"]):
+                            continue
+                candidates.append((response, [file]))
+        for (_, extension), files in groups.items():
+            chosen, used = [], set()
+            for track in target.get("tracks", []):
+                wanted = normalized(track["title"])
+                matches = []
+                for file in files:
+                    path = PureWindowsPath(file["filename"])
+                    stem = normalized(re.sub(r"^\s*(?:\d{1,2}[-.]\d{1,3}|\d{1,3})[\s._-]+", "", path.stem))
+                    if stem == wanted or stem == normalized(target["artist"]) + " " + wanted:
+                        matches.append(file)
+                if len(matches) != 1 or matches[0]["filename"] in used:
+                    break
+                chosen.append(matches[0])
+                used.add(matches[0]["filename"])
+            else:
+                if chosen:
+                    candidates.append((response, chosen))
+    candidates.sort(key=lambda pair: (0 if all(f["filename"].lower().endswith(".flac") for f in pair[1]) else 1,
+                                      pair[0].get("queueLength", 0), -pair[0].get("uploadSpeed", 0),
+                                      pair[0]["username"], pair[1][0]["filename"]))
+    return candidates[0] if candidates else None
+
+
+def import_payload(app, target, decisions, folder):
+    files = []
+    root = Path(folder).resolve()
+    for item in decisions:
+        if item.get("rejections") or not item.get("quality"):
+            continue
+        path = Path(item["path"]).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            continue
+        result = {key: item[key] for key in ("path", "quality", "languages", "releaseGroup", "indexerFlags", "folderName", "releaseType") if key in item}
+        if app == "radarr":
+            if (item.get("movie") or {}).get("id") != target["id"]:
+                continue
+            result["movieId"] = target["id"]
+        elif app == "sonarr":
+            episodes = item.get("episodes") or []
+            if (item.get("series") or {}).get("id") != target["seriesId"] or [e["id"] for e in episodes] != [target["id"]]:
+                continue
+            result.update(seriesId=target["seriesId"], episodeIds=[target["id"]])
+        else:
+            tracks = item.get("tracks") or []
+            if (item.get("album") or {}).get("id") != target["id"] or (item.get("artist") or {}).get("id") != target["artistId"]:
+                continue
+            if not tracks or any(t["id"] not in target["missingTrackIds"] for t in tracks):
+                continue
+            result.update(artistId=target["artistId"], albumId=target["id"],
+                          albumReleaseId=item["albumReleaseId"], trackIds=[t["id"] for t in tracks],
+                          disableReleaseSwitching=True)
+        files.append(result)
+    if app == "lidarr" and set(t for f in files for t in f["trackIds"]) != set(target["missingTrackIds"]):
+        return None
+    if app != "lidarr" and len(files) != 1:
+        return None
+    return {"name": "ManualImport", "files": files, "importMode": "copy"} if files else None
+
+
+class Worker:
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time):
+        self.app, self.arr, self.slsk = app, arr, slsk
+        self.config, self.downloads = Path(config), Path(downloads)
+        self.delay, self.sources, self.audio, self.clock = delay, sources, audio, clock
+        self.prefix = "api/v1/" if app == "lidarr" else "api/v3/"
+        state = self.config / "extended" / "soulseek"
+        state.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(state / "jobs.sqlite", timeout=10)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, target TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'waiting', first_seen REAL NOT NULL, next_run REAL NOT NULL DEFAULT 0, data TEXT NOT NULL DEFAULT '{}')")
+        self.db.commit()
+
+    def save(self, ident, state, data, wait=0):
+        with self.db:
+            self.db.execute("UPDATE jobs SET state=?,data=?,next_run=? WHERE id=?", (state, json.dumps(data), self.clock()+wait, ident))
+        print(f"Soulseek {self.app}: item {ident}: {state}", flush=True)
+
+    def pages(self, endpoint):
+        page = 1
+        while True:
+            value = self.arr.call(self.prefix+endpoint, page=page, pageSize=100, sortKey="id", sortDirection="ascending")
+            records = value["records"]
+            yield from records
+            if page*100 >= value["totalRecords"] or not records:
+                break
+            page += 1
+
+    def targets(self):
+        now = self.clock()
+        if self.app == "radarr":
+            records = self.arr.call(self.prefix+"movie")
+        else:
+            records = self.pages("wanted/missing")
+        for record in records:
+            if not record.get("monitored"):
+                continue
+            ident = record["id"]
+            if self.app == "radarr":
+                if record.get("hasFile") or not released(record.get("digitalRelease") or record.get("physicalRelease") or record.get("inCinemas"), now):
+                    continue
+                target = dict(app=self.app, id=ident, title=record["title"], year=record["year"])
+                target["query"] = f"{target['title']} {target['year']}"
+            elif self.app == "sonarr":
+                series = record.get("series") or self.arr.call(self.prefix+f"series/{record['seriesId']}")
+                if not series.get("monitored") or record.get("hasFile") or not released(record.get("airDateUtc"), now):
+                    continue
+                if series.get("seriesType") != "standard":
+                    continue  # Anime absolute numbering and daily episodes need a separate matcher.
+                target = dict(app=self.app, id=ident, title=series["title"], seriesId=series["id"], season=record["seasonNumber"], episode=record["episodeNumber"])
+                target["query"] = f"{target['title']} S{target['season']:02}E{target['episode']:02}"
+            else:
+                artist = record.get("artist") or self.arr.call(self.prefix+f"artist/{record['artistId']}")
+                if not artist.get("monitored") or not released(record.get("releaseDate"), now):
+                    continue
+                album = self.arr.call(self.prefix+f"album/{ident}")
+                releases = [r for r in album.get("releases", []) if r.get("monitored")]
+                if len(releases) != 1:
+                    continue
+                tracks = self.arr.call(self.prefix+"track", albumId=ident, albumReleaseId=releases[0]["id"])
+                missing = [t["id"] for t in tracks if not t.get("hasFile") and not t.get("trackFileId")]
+                if not tracks or not missing:
+                    continue
+                target = dict(app=self.app, id=ident, title=record["title"], artist=artist["artistName"], artistId=artist["id"], tracks=tracks, missingTrackIds=missing)
+                target["query"] = f"{target['artist']} {target['title']}"
+            yield target
+
+    def queued(self):
+        return list(self.pages("queue"))
+
+    def blocked(self, target, queue):
+        for entry in queue:
+            if self.app == "radarr" and entry.get("movieId") == target["id"]:
+                return True
+            if self.app == "sonarr" and (entry.get("episodeId") == target["id"] or entry.get("seriesId") == target["seriesId"]):
+                return True
+            if self.app == "lidarr" and entry.get("albumId") == target["id"]:
+                return True
+        return False
+
+    def ready(self, row, target):
+        if self.app == "lidarr" and self.audio and self.sources != "soulseek":
+            marker = self.config / "extended" / "soulseek" / "fallback" / str(target["id"])
+            # This marker is written only after selected streaming providers missed.
+            if marker.is_file():
+                return True
+            previous = self.config / "extended" / "logs" / "notfound"
+            if self.clock()-row["first_seen"] < self.delay:
+                return False
+            if any(previous.glob(f"{target['id']}--*")):
+                return True
+            running = self.config / "extended" / "soulseek" / "audio-active"
+            try:
+                pid = int(running.read_text().strip())
+                command = Path(f"/proc/{pid}/cmdline").read_bytes()
+                return b"Audio" not in command
+            except (OSError, ValueError):
+                # Streaming worker unavailable/failed: allow the delayed fallback.
+                return True
+        delay = 0 if self.app == "lidarr" and self.sources == "soulseek" else self.delay
+        return self.clock()-row["first_seen"] >= delay
+
+    def tick(self):
+        version = self.slsk.call("api/v0/application/version")
+        if isinstance(version, dict):
+            parts = tuple(version.get(k, -1) for k in ("major", "minor", "patch"))
+        else:
+            match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+.]|$)", str(version))
+            parts = tuple(map(int, match.groups())) if match else ()
+        client = getattr(self.slsk, "client", "slskd")
+        minimum = (0, 1, 0) if client == "nicotine" else (0, 26, 0)
+        if not parts or parts < minimum:
+            print(f"Soulseek: {client} API version is unsupported (minimum {'.'.join(map(str, minimum))})", flush=True)
+            return
+        application = self.slsk.call("api/v0/application")
+        if client == "nicotine" and not {"search", "download-batches", "batch-destination"}.issubset(application.get("capabilities", [])):
+            raise ValueError("Nicotine API capabilities missing")
+        if not (application.get("server") or {}).get("isConnected"):
+            print("Soulseek: slskd is disconnected; postponing searches", flush=True)
+            return
+        targets = {t["id"]: t for t in self.targets()}
+        queue = self.queued()  # Failure must abort: do not assume an empty queue.
+        now = self.clock()
+        with self.db:
+            for ident, target in targets.items():
+                self.db.execute("INSERT INTO jobs(id,target,first_seen) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET target=excluded.target,state=CASE WHEN jobs.state='done' THEN 'waiting' ELSE jobs.state END", (ident, json.dumps(target), now))
+        searches = 0
+        active = self.db.execute("SELECT count(*) FROM jobs WHERE state IN ('searching','enqueueing','downloading','downloaded','importing')").fetchone()[0]
+        for row in self.db.execute("SELECT * FROM jobs WHERE next_run<=? ORDER BY first_seen,id", (now,)).fetchall():
+            ident, state, data = row["id"], row["state"], json.loads(row["data"])
+            target = targets.get(ident)
+            if target is None:
+                if state != "done":
+                    self.save(ident, "done", data)
+                continue
+            if state in ("done", "review") or self.blocked(target, queue):
+                continue
+            try:
+                if state == "waiting":
+                    if searches >= 3 or active >= 3 or not self.ready(row, target):
+                        continue
+                    searches += 1
+                    active += 1
+                    data = {"search": str(uuid.uuid4())}
+                    self.save(ident, "searching", data, 30)
+                    self.slsk.call("api/v0/searches", {"id": data["search"], "searchText": target["query"], "searchTimeout": 15000, "responseLimit": 100, "fileLimit": 10000, "filterResponses": True})
+                elif state == "searching":
+                    try:
+                        result = self.slsk.call(f"api/v0/searches/{data['search']}", includeResponses="true")
+                    except ApiError as error:
+                        if error.status == 404:
+                            self.save(ident, "waiting", {}, 300)
+                            continue
+                        raise
+                    if not result.get("isComplete"):
+                        continue
+                    choice = choose_files(target, result.get("responses", []))
+                    if not choice:
+                        self.save(ident, "waiting", {}, 86400)
+                        continue
+                    peer, files = choice
+                    names = [PureWindowsPath(f["filename"]).name.casefold() for f in files]
+                    if len(names) != len(set(names)):
+                        self.save(ident, "review", {"reason": "duplicate basenames"})
+                        continue
+                    data.update(batch=str(uuid.uuid4()), username=peer["username"], files=[{"filename": f["filename"], "size": f["size"]} for f in files])
+                    self.save(ident, "enqueueing", data)
+                elif state == "enqueueing":
+                    try:
+                        self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}")
+                    except ApiError as error:
+                        if error.status != 404:
+                            raise
+                        try:
+                            self.slsk.call("api/v0/transfers/downloads/batches", {"id": data["batch"], "searchId": data["search"], "username": data["username"], "files": data["files"], "options": {"destination": f"arr-scripts/{self.app}/{data['batch']}"}})
+                        except ApiError as error:
+                            if error.status != 409:
+                                raise
+                    self.save(ident, "downloading", data, 60)
+                elif state == "downloading":
+                    batch = self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}")
+                    transfers = batch.get("transfers") or []
+                    expected = {(f["filename"], f["size"]) for f in data["files"]}
+                    if {(f["filename"], f["size"]) for f in transfers} != expected:
+                        self.save(ident, "review", {**data, "reason": "partial enqueue"})
+                    elif all(f["state"] == "Completed, Succeeded" for f in transfers):
+                        self.save(ident, "downloaded", data)
+                    elif any("Completed" in f["state"] and "Succeeded" not in f["state"] for f in transfers):
+                        self.save(ident, "review", {**data, "reason": "failed transfer"})
+                elif state == "downloaded":
+                    folder = self.downloads / "arr-scripts" / self.app / data["batch"]
+                    if not folder.is_dir():
+                        raise ValueError("Download mount unavailable")
+                    for file in data["files"]:
+                        local = (folder / PureWindowsPath(file["filename"]).name).resolve()
+                        if not local.is_relative_to(folder.resolve()) or not local.is_file() or local.stat().st_size != file["size"]:
+                            raise ValueError("Completed files unavailable or size mismatch")
+                    decisions = self.arr.call(self.prefix+"manualimport", folder=str(folder), filterExistingFiles="true")
+                    payload = import_payload(self.app, target, decisions, folder)
+                    if not payload:
+                        self.save(ident, "review", {**data, "reason": "import rejected or identity mismatch"})
+                        continue
+                    # A lost response may have accepted the import: don't blindly resubmit.
+                    self.save(ident, "importing", data, 60)
+                    result = self.arr.call(self.prefix+"command", payload)
+                    data["command"] = result["id"]
+                    self.save(ident, "importing", data, 60)
+                elif state == "importing":
+                    if "command" not in data:
+                        self.save(ident, "review", {**data, "reason": "uncertain import; inspect library"})
+                        continue
+                    result = self.arr.call(self.prefix+f"command/{data['command']}")
+                    if result["status"] in ("completed", "failed", "aborted"):
+                        self.save(ident, "review", {**data, "reason": "import finished but item remains missing"})
+            except (ApiError, ValueError, KeyError, TypeError, OSError) as error:
+                # Never log API response bodies, credentials or peer-supplied URLs.
+                print(f"Soulseek {self.app}: item {ident}: {type(error).__name__}; deferred", flush=True)
+                # Reconcile persisted intent on next run, including uncertain POSTs.
+                with self.db:
+                    self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
+
+
+@contextmanager
+def worker_lock(config):
+    import fcntl  # The production worker runs in Linux containers.
+    path = Path(config) / "extended" / "soulseek"
+    path.mkdir(parents=True, exist_ok=True)
+    with (path / "worker.lock").open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+        else:
+            yield True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--retry", type=int, help="Retry a reviewed job after fixing its cause")
+    parser.add_argument("--owns", type=int, help="Local-only check: exit 0 if Soulseek owns this active job")
+    args = parser.parse_args()
+    config = os.environ.get("SOULSEEK_CONFIG_DIR", "/config")
+    if args.owns is not None:
+        database = Path(config)/"extended/soulseek/jobs.sqlite"
+        if not database.is_file():
+            raise SystemExit(1)
+        try:
+            with sqlite3.connect(database.resolve().as_uri()+"?mode=ro", uri=True, timeout=5) as connection:
+                row = connection.execute("SELECT state FROM jobs WHERE id=?", (args.owns,)).fetchone()
+        except sqlite3.Error:
+            raise SystemExit(0)  # Unreadable state: avoid racing an uncertain job.
+        raise SystemExit(0 if row and row[0] in ("searching", "enqueueing", "downloading", "downloaded", "importing") else 1)
+    app = os.environ["SOULSEEK_APP"]
+    if app not in ("lidarr", "sonarr", "radarr"):
+        raise ValueError("Unsupported Arr application")
+    url, key = os.environ.get("SOULSEEK_ARR_URL"), os.environ.get("SOULSEEK_ARR_API_KEY")
+    if not url or not key:
+        root = ET.parse(Path(config)/"config.xml").getroot()
+        url = url or f"http://127.0.0.1:{root.findtext('Port')}/{(root.findtext('UrlBase') or '').strip('/')}"
+        key = key or root.findtext("ApiKey")
+    downloads = Path(os.environ["SOULSEEK_DOWNLOAD_PATH"])
+    if not downloads.is_absolute() or not downloads.is_dir():
+        raise ValueError("Mount slskd's completed download directory first")
+    delay = int(os.environ.get("SOULSEEK_FALLBACK_DELAY", "3600"))
+    if delay < 0:
+        raise ValueError("Fallback delay must be nonnegative")
+    with worker_lock(config) as acquired:
+        if not acquired:
+            return
+        worker = Worker(app, Api(url, key), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
+                        config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
+                        os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true")
+        try:
+            if args.retry is not None:
+                row = worker.db.execute("SELECT * FROM jobs WHERE id=? AND state='review'", (args.retry,)).fetchone()
+                if not row:
+                    raise ValueError("Job is not awaiting review")
+                data = json.loads(row["data"])
+                worker.save(args.retry, "downloading" if "batch" in data else "waiting", data)
+            worker.tick()
+        finally:
+            worker.db.close()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ApiError, ValueError, KeyError, OSError, ET.ParseError) as error:
+        print(f"Soulseek: {type(error).__name__}; check configuration and API availability", flush=True)
+        raise SystemExit(1)

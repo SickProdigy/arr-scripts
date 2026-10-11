@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.51"
+scriptVersion="2.52"
 scriptName="Audio"
 
 ### Import Settings
@@ -100,6 +100,26 @@ AddDownloadClient () {
 verifyConfig () {
   ### Import Settings
   source /config/extended.conf
+  # Normalize provider selection while preserving the existing "both" setting.
+  selectedAudioSources="${dlClientSource:-deezer}"
+  case "$selectedAudioSources" in
+    all) selectedAudioSources="deezer,tidal,soulseek" ;;
+    both) selectedAudioSources="deezer,tidal" ;;
+  esac
+  dlClientUseDeezer="false"
+  dlClientUseTidal="false"
+  case ",$selectedAudioSources," in *,deezer,*) dlClientUseDeezer="true" ;; esac
+  case ",$selectedAudioSources," in *,tidal,*) dlClientUseTidal="true" ;; esac
+  if [[ ! "$selectedAudioSources" =~ ^(deezer|tidal|soulseek)(,(deezer|tidal|soulseek))*$ ]]; then
+    log "ERROR :: Invalid dlClientSource; choose deezer, tidal, both, soulseek, all or a comma-separated provider list"
+    sleep "${audioScriptInterval:-15m}"
+    return 1
+  fi
+  if [ "$selectedAudioSources" == "soulseek" ] && [ "${enableSoulseek:-false}" != "true" ]; then
+    log "ERROR :: Soulseek-only selection requires enableSoulseek=true"
+    sleep "${audioScriptInterval:-15m}"
+    return 1
+  fi
   if [ "$enableAudio" != "true" ]; then
     log "Script is not enabled, enable by setting enableAudio to \"true\" by modifying the \"/config/extended.conf\" config file..."
     log "Sleeping (infinity)"
@@ -172,8 +192,8 @@ Configuration () {
 	log " May the beats be with you!"
 	log "-----------------------------------------------------------------------------"
 	log "Donate: https://github.com/sponsors/RandomNinjaAtk"
-	log "Project: https://gitea.rcs1.top/sickprodigy/arr-scripts"
-	log "Support: https://gitea.rcs1.top/sickprodigy/arr-scripts/issues"
+	log "Project: https://github.com/SickProdigy/arr-scripts"
+	log "Support: https://github.com/SickProdigy/arr-scripts/issues"
 	log "-----------------------------------------------------------------------------"
 	sleep 5
 	log ""
@@ -1332,6 +1352,12 @@ SearchProcess () {
 	for lidarrMissingId in $(ls -tr /config/extended/cache/lidarr/list); do
 		processNumber=$(( $processNumber + 1 ))
 		wantedAlbumId=$(echo $lidarrMissingId | sed -e "s%[^[:digit:]]%%g")
+        if [ "${enableSoulseek:-false}" == "true" ] && [[ ",$selectedAudioSources," == *,soulseek,* ]] && [ -f /config/extended/python/Soulseek.py ]; then
+            if python3 /config/extended/python/Soulseek.py --owns "$wantedAlbumId"; then
+                log "Soulseek already owns album $wantedAlbumId; skipping streaming downloads"
+                continue
+            fi
+        fi
 		checkLidarrAlbumId=$wantedAlbumId
 		wantedAlbumListSource=$(echo $lidarrMissingId | sed -e "s%[^[:alpha:]]%%g")
 		lidarrAlbumData="$(CurlRequest "$arrUrl/api/v1/album/$wantedAlbumId?apikey=${arrApiKey}")"
@@ -1418,20 +1444,10 @@ SearchProcess () {
 			continue
 		fi
 
-		if [ "$dlClientSource" == "deezer" ]; then
-			skipTidal=true
-			skipDeezer=false
-		fi
-
-		if [ "$dlClientSource" == "tidal" ]; then
-			skipDeezer=true
-			skipTidal=false
-		fi
-
-		if [ "$dlClientSource" == "both" ]; then
-			skipDeezer=false
-			skipTidal=false
-		fi	
+		skipDeezer=true
+		skipTidal=true
+		[ "$dlClientUseDeezer" == "true" ] && skipDeezer=false
+		[ "$dlClientUseTidal" == "true" ] && skipTidal=false
 
 		if [ "$skipDeezer" == "false" ]; then
 
@@ -1551,7 +1567,7 @@ SearchProcess () {
 					
 					# Tidal Artist search
 					if [ "$lidarrDownloadImportNotfication" == "false" ]; then
-						if [ "$dlClientSource" == "both" ] || [ "$dlClientSource" == "tidal" ]; then
+						if [ "$dlClientUseTidal" == "true" ]; then
 							for tidalArtistId in $(echo $tidalArtistIds); do
 								ArtistTidalSearch "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal" "$tidalArtistId" "$lyricFilter"
 								sleep 0.01
@@ -1563,7 +1579,7 @@ SearchProcess () {
 
 					# Deezer artist search
 					if [ "$lidarrDownloadImportNotfication" == "false" ]; then
-						if [ "$dlClientSource" == "both" ] || [ "$dlClientSource" == "deezer" ]; then
+						if [ "$dlClientUseDeezer" == "true" ]; then
 							for dId in ${!deezerArtistIds[@]}; do
 								deezerArtistId="${deezerArtistIds[$dId]}"
 								ArtistDeezerSearch "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal" "$deezerArtistId" "$lyricFilter"
@@ -1576,7 +1592,7 @@ SearchProcess () {
 				#log "3 : $lidarrDownloadImportNotfication"
 				# Tidal fuzzy search
 				if [ "$lidarrDownloadImportNotfication" == "false" ]; then
-					if [ "$dlClientSource" == "both" ] || [ "$dlClientSource" == "tidal" ]; then
+					if [ "$dlClientUseTidal" == "true" ]; then
 						FuzzyTidalSearch "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal" "$lyricFilter"
 						sleep 0.01
 					fi
@@ -1585,7 +1601,7 @@ SearchProcess () {
 				#log "4 : $lidarrDownloadImportNotfication"
 				# Deezer fuzzy search
 				if [ "$lidarrDownloadImportNotfication" == "false" ]; then
-					if [ "$dlClientSource" == "both" ] || [ "$dlClientSource" == "deezer" ]; then
+					if [ "$dlClientUseDeezer" == "true" ]; then
 						FuzzyDeezerSearch "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal" "$lyricFilter"
 						sleep 0.01
 					fi
@@ -1605,6 +1621,14 @@ SearchProcess () {
 			# Break after all operations are complete
 			if [ "$loopCount" == "$endLoop" ]; then
 				log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Album Not found"
+                case ",$selectedAudioSources," in
+                    *,soulseek,*)
+                        if [ "${enableSoulseek:-false}" == "true" ]; then
+                            mkdir -p /config/extended/soulseek/fallback
+                            touch "/config/extended/soulseek/fallback/$wantedAlbumId"
+                        fi
+                        ;;
+                esac
 				if [ "$skipNotFoundLogCreation" == "false" ]; then
 					log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Marking Album as notfound"
 					if [ ! -f "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId" ]; then
@@ -2220,6 +2244,10 @@ NotifyWebhook () {
 
 AudioProcess () {
 
+  if [ "$dlClientUseDeezer" != "true" ] && [ "$dlClientUseTidal" != "true" ]; then
+    log "Soulseek-only selection: background worker owns downloads"
+    return
+  fi
   Configuration
   
   # Perform NotFound Folder Cleanup process
@@ -2229,11 +2257,11 @@ AudioProcess () {
   
   DownloadFormat
   
-  if [ "$dlClientSource" == "deezer" ] || [ "$dlClientSource" == "both" ]; then
+  if [ "$dlClientUseDeezer" == "true" ]; then
   	DeemixClientSetup
   fi
   
-  if [ "$dlClientSource" == "tidal" ] || [ "$dlClientSource" == "both" ]; then
+  if [ "$dlClientUseTidal" == "true" ]; then
   	TidalClientSetup
   fi
   
@@ -2242,12 +2270,10 @@ AudioProcess () {
   # Get artist list for LidarrMissingAlbumSearch process, to prevent searching for artists that will not be processed by the script
   lidarrMissingAlbumArtistsData=$(CurlRequest "$arrUrl/api/v1/artist?apikey=$arrApiKey" | jq -r .[])
   
-  if [ "$dlClientSource" == "deezer" ] || [ "$dlClientSource" == "tidal" ] || [ "$dlClientSource" == "both" ]; then
+  if [ "$dlClientUseDeezer" == "true" ] || [ "$dlClientUseTidal" == "true" ]; then
   	GetMissingCutOffList
   else
-  	log "ERROR :: No valid dlClientSource set"
-  	log "ERROR :: Expected configuration :: deezer or tidal or both"
-  	log "ERROR :: dlClientSource set as: \"$dlClientSource\""
+    log "Soulseek-only selection: background worker owns wanted searches"
   fi
   
   if [ "$addDeezerTopArtists" == "true" ] || [ "$addDeezerTopAlbumArtists" == "true" ] || [ "$addDeezerTopTrackArtists" == "true" ] || [ "$addRelatedArtists" == "true" ]; then
@@ -2259,13 +2285,17 @@ AudioProcess () {
 }
 
 log "Starting Script...."
+trap 'rm -f /config/extended/soulseek/audio-active' EXIT
 for (( ; ; )); do
 	let i++
  	logfileSetup
-        verifyConfig
+        verifyConfig || continue
 	getArrAppInfo
 	verifyApiAccess
+    mkdir -p /config/extended/soulseek
+    printf '%s\n' "$$" > /config/extended/soulseek/audio-active
 	AudioProcess
+    rm -f /config/extended/soulseek/audio-active
 	log "Script sleeping for $audioScriptInterval..."
 	sleep $audioScriptInterval
 done

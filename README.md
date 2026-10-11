@@ -4,11 +4,11 @@ Official Home of the scripts that were previously packaged with the "Extended" c
 
 ## Usage
 
- [Radarr Instructions](https://github.com/RandomNinjaAtk/arr-scripts/tree/main/radarr/readme.md)  
- [Sonarr Instructions](https://github.com/RandomNinjaAtk/arr-scripts/tree/main/sonarr/readme.md)  
- [Lidarr Instructions](https://github.com/RandomNinjaAtk/arr-scripts/tree/main/lidarr/readme.md)  
- [Readarr Instructions](https://github.com/RandomNinjaAtk/arr-scripts/tree/main/readarr/readme.md)  
- [SABnzbd Instructions](https://github.com/RandomNinjaAtk/arr-scripts/tree/main/sabnzbd#/readme.md)
+- [Radarr Instructions](https://github.com/SickProdigy/arr-scripts/tree/main/radarr/readme.md)
+- [Sonarr Instructions](https://github.com/SickProdigy/arr-scripts/tree/main/sonarr/readme.md)
+- [Lidarr Instructions](https://github.com/SickProdigy/arr-scripts/tree/main/lidarr/readme.md)
+- [Readarr Instructions](https://github.com/RandomNinjaAtk/arr-scripts/tree/main/readarr/readme.md)
+- [SABnzbd Instructions](https://github.com/RandomNinjaAtk/arr-scripts/tree/main/sabnzbd#/readme.md)
 
 ## WARNING
 
@@ -21,3 +21,9 @@ Also see here: <https://wiki.servarr.com/docker-guide#portainer>
 Scripts are provided as-is... Generally, if a script works one time, it will work everytime, that is the nature of scripts... So if you're experiencing an issue that has not been previously reported and is more likely a technical problem of some sort, it is more than likely caused by user error...
 
 Please note that use of arr-scripts is not supported by the Arr app's community. The scripts do not modify the software/code of the Arr app, all changes to the Arr app are implemented using publicly available API calls.
+
+## Optional Soulseek downloads
+
+Lidarr, Sonarr and Radarr can use slskd or Nicotine+ with the separate API plugin.
+See [Soulseek setup](universal/soulseek.md) for provider selection, shared download
+mounts and current import limits.
