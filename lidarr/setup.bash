@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.21"
+scriptVersion="1.4.22"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -164,6 +164,7 @@ mkdir -p /config/extended/python /custom-services.d
 soulseekRawBase="${ARR_SCRIPTS_RAW_BASE:-https://raw.githubusercontent.com/SickProdigy/arr-scripts/main}"
 curl -sfL "${soulseekRawBase%/}/universal/Soulseek.bash" -o /config/extended/Soulseek.bash || exit 1
 curl -sfL "${soulseekRawBase%/}/universal/python/Soulseek.py" -o /config/extended/python/Soulseek.py || exit 1
+curl -sfL "${soulseekRawBase%/}/universal/python/SoulseekAudio.py" -o /config/extended/python/SoulseekAudio.py || exit 1
 curl -sfL "${soulseekRawBase%/}/universal/Soulseek.service.bash" -o /custom-services.d/Soulseek || exit 1
 sed -i 's/__APP__/lidarr/g' /custom-services.d/Soulseek
 chmod +x /custom-services.d/Soulseek

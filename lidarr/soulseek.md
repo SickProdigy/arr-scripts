@@ -97,3 +97,30 @@ New Nicotine batches go directly under the plugin's completed-download root:
 `/downloads/soulseek/<batch UUID>`. There are no additional `arr-scripts` or
 `lidarr` subfolders. Previously queued jobs retain their original location until
 finished or discarded; deleting a directory does not cancel an active transfer.
+
+## Audio format and quality
+
+Soulseek uses Lidarr's existing `audioFormat`, `audioBitrate`, and
+`requireQuality` settings. Searches remain `Artist Album`; returned files are
+ranked by format and available audio attributes, rather than searching each
+extension separately. Complete albums from one peer are required.
+
+With `audioFormat="native"`, `master` prefers high-resolution lossless and
+`lossless` prefers lossless. When `requireQuality="false"`, lossy formats such
+as MP3 are accepted as fallback. `high` and `low` prefer lossy audio near
+320 and 128 kbps respectively. M4A can contain AAC or ALAC; the extension alone
+does not establish lossless quality.
+
+For `mp3`, `aac`, `opus`, or `alac`, use a numeric `audioBitrate` as with the
+streaming downloader. Lossless sources are converted in private staging before
+handoff. Existing lossy fallback files keep their original encoding; they are
+never upconverted to lossless or re-encoded to claim a higher bitrate. Opus
+conversion preserves text metadata but does not copy attached cover art.
+
+Strict quality excludes unsuitable or unverifiable search results and probes
+downloaded audio with ffprobe before publication. Conversion uses ffmpeg and
+verifies the output codec; an encoder's target bitrate is not a guarantee of
+an exact measured bitrate. Quality/conversion failures are retained for review.
+Peer attributes remain hints, not proof of the original recording's fidelity.
+Settings are saved with each new search so active batches retain their policy.
+These audio settings do not affect Sonarr or Radarr.

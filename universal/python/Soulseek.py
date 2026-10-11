@@ -24,6 +24,16 @@ import uuid
 import xml.etree.ElementTree as ET
 
 
+def AudioPolicy(*args, **kwargs):
+    """Load the Lidarr-only audio helper when music processing needs it."""
+    import sys
+    sibling = str(Path(__file__).resolve().parent)
+    if sibling not in sys.path:
+        sys.path.insert(0, sibling)
+    from SoulseekAudio import AudioPolicy as Policy
+    return Policy(*args, **kwargs)
+
+
 class ApiError(RuntimeError):
     def __init__(self, status=0):
         self.status = status
@@ -95,7 +105,8 @@ def safe_remote(name):
     return bool(parts) and not any(p in ("..", ".") for p in parts) and "\x00" not in name and not re.search(r'[<>:"|?*]', PureWindowsPath(name).name)
 
 
-def choose_files(target, responses):
+def choose_files(target, responses, policy=None):
+    policy = (policy or AudioPolicy()) if target["app"] == "lidarr" else None
     """Conservative identities; the Arr import decision remains authoritative."""
     candidates = []
     for response in responses:
@@ -150,9 +161,9 @@ def choose_files(target, responses):
                 chosen.append(matches[0])
                 used.add(matches[0]["filename"])
             else:
-                if chosen:
+                if chosen and policy.choose_rank(chosen) is not None:
                     candidates.append((response, chosen))
-    candidates.sort(key=lambda pair: (0 if all(f["filename"].lower().endswith(".flac") for f in pair[1]) else 1,
+    candidates.sort(key=lambda pair: (policy.choose_rank(pair[1]) if target["app"] == "lidarr" else (0,),
                                       pair[0].get("queueLength", 0), -pair[0].get("uploadSpeed", 0),
                                       pair[0]["username"], pair[1][0]["filename"]))
     return candidates[0] if candidates else None
@@ -196,7 +207,8 @@ def import_payload(app, target, decisions, folder):
 
 
 class Worker:
-    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None):
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None):
+        self.audio_policy = (audio_policy or AudioPolicy()) if app == "lidarr" else None
         self.imports = Path(imports) if imports else None
         self.app, self.arr, self.slsk = app, arr, slsk
         self.config, self.downloads = Path(config), Path(downloads)
@@ -446,6 +458,10 @@ class Worker:
                 writable(dest)
                 if dest.stat().st_size != file["size"]:
                     raise ValueError("Staging size mismatch")
+            policy = AudioPolicy(**data.get("audioPolicy", self.audio_policy.config))
+            data["importFiles"] = policy.prepare(staging, data["files"])
+            for prepared in data["importFiles"]:
+                writable(staging/PureWindowsPath(prepared["filename"]).name)
             data["handoff"] = str(destination)
             data["importTarget"] = target
             self.save(target["id"], "publishing", data)
@@ -459,8 +475,11 @@ class Worker:
         # for streaming providers. Never remove an original without its copy.
         for file in data["files"]:
             source = folder/PureWindowsPath(file["filename"]).name
-            copied = destination/source.name
-            if source.is_symlink() or copied.is_symlink() or not copied.is_file() or copied.stat().st_size != file["size"]:
+            prepared = next((f for f in data.get("importFiles", data["files"]) if f.get("sourceFilename", f["filename"]) == file["filename"]), None)
+            if prepared is None:
+                raise ValueError("Missing published file mapping")
+            copied = destination/PureWindowsPath(prepared["filename"]).name
+            if source.is_symlink() or copied.is_symlink() or not copied.is_file() or copied.stat().st_size != prepared["size"]:
                 raise ValueError("Published batch changed; retained originals")
             if source.exists():
                 if not source.is_file() or source.stat().st_size != file["size"]:
@@ -483,7 +502,7 @@ class Worker:
         marker = folder/".arr-soulseek.json"
         if marker.is_symlink() or not marker.is_file() or json.loads(marker.read_text()).get("batch") != data["batch"]:
             raise ValueError("Handoff ownership mismatch")
-        for file in data["files"]:
+        for file in data.get("importFiles", data["files"]):
             path = folder/PureWindowsPath(file["filename"]).name
             if path.is_symlink():
                 raise ValueError("Symlinked handoff file")
@@ -656,6 +675,8 @@ class Worker:
                     searches += 1
                     active += 1
                     data = {"search": str(uuid.uuid4())}
+                    if self.audio_policy is not None:
+                        data["audioPolicy"] = self.audio_policy.config
                     self.save(ident, "searching", data, 30)
                     self.slsk.call("api/v0/searches", {"id": data["search"], "searchText": target["query"], "searchTimeout": 15000, "responseLimit": 100, "fileLimit": 10000, "filterResponses": True})
                 elif state == "searching":
@@ -668,7 +689,7 @@ class Worker:
                         raise
                     if not result.get("isComplete"):
                         continue
-                    choice = choose_files(target, result.get("responses", []))
+                    choice = choose_files(target, result.get("responses", []), AudioPolicy(**data.get("audioPolicy", self.audio_policy.config)) if self.app == "lidarr" else None)
                     if not choice:
                         self.save(ident, "waiting", {}, 86400)
                         continue
@@ -739,6 +760,9 @@ class Worker:
                     if result["status"] in ("completed", "failed", "aborted"):
                         self.save(ident, "review", {**data, "reason": "import finished but item remains missing"})
             except (ApiError, ValueError, KeyError, TypeError, OSError) as error:
+                if type(error).__name__ == "AudioQualityError":
+                    self.save(ident, "review", {**data, "reason": str(error)})
+                    continue
                 # Never log API response bodies, credentials or peer-supplied URLs.
                 print(f"Soulseek {self.app}: item {ident}: {type(error).__name__}; deferred", flush=True)
                 # Reconcile persisted intent on next run, including uncertain POSTs.
@@ -825,6 +849,7 @@ def main():
         worker = Worker(app, Api(url, key), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
                         os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true",
+                        audio_policy=AudioPolicy(os.environ.get("SOULSEEK_AUDIO_FORMAT", "native"), os.environ.get("SOULSEEK_AUDIO_BITRATE", "master"), os.environ.get("SOULSEEK_REQUIRE_QUALITY") == "true") if app == "lidarr" else None,
                         imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None)
         try:
             if args.discard is not None:
