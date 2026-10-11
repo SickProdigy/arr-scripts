@@ -204,6 +204,8 @@ class Worker:
         self.db = sqlite3.connect(state / "jobs.sqlite", timeout=10)
         self.db.row_factory = sqlite3.Row
         self.db.execute("CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, target TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'waiting', first_seen REAL NOT NULL, next_run REAL NOT NULL DEFAULT 0, data TEXT NOT NULL DEFAULT '{}')")
+        self.db.execute("CREATE TABLE IF NOT EXISTS scan (id INTEGER PRIMARY KEY CHECK(id=1), page INTEGER NOT NULL)")
+        self.db.execute("INSERT OR IGNORE INTO scan(id,page) VALUES(1,1)")
         self.db.commit()
 
     def save(self, ident, state, data, wait=0):
@@ -221,12 +223,17 @@ class Worker:
                 break
             page += 1
 
-    def targets(self):
+    def discover(self):
+        # Persist a small-page cursor so a large library cannot delay searches.
+        page = self.db.execute("SELECT page FROM scan WHERE id=1").fetchone()[0]
+        value = self.arr.call(self.prefix+"wanted/missing", page=page, pageSize=10,
+                              sortKey="id", sortDirection="ascending")
+        records = value["records"]
+        next_page = page+1 if records and page*10 < value["totalRecords"] else 1
+        return records, next_page, value["totalRecords"], page
+
+    def targets(self, records):
         now = self.clock()
-        if self.app == "radarr":
-            records = self.arr.call(self.prefix+"movie")
-        else:
-            records = self.pages("wanted/missing")
         for record in records:
             if not record.get("monitored"):
                 continue
@@ -371,15 +378,73 @@ class Worker:
         if not (application.get("server") or {}).get("isConnected"):
             print("Soulseek: slskd is disconnected; postponing searches", flush=True)
             return
-        targets = {t["id"]: t for t in self.targets()}
         queue = self.queued()  # Failure must abort: do not assume an empty queue.
         now = self.clock()
+        # Reconcile owned transfers first, even when they are outside this page.
+        rows = self.db.execute("SELECT * FROM jobs WHERE next_run<=? AND state NOT IN ('done','review') "
+                               "ORDER BY CASE WHEN state='waiting' THEN 1 ELSE 0 END,next_run,first_seen,id LIMIT 20",
+                               (now,)).fetchall()
+        records, next_page, total, page = self.discover()
+        kind = {"lidarr": "album", "sonarr": "episode", "radarr": "movie"}[self.app]
+        page_ids = {record["id"] for record in records}
+        priority_markers = {}
+        # Streaming misses should not wait for the wanted-list cursor to reach
+        # their album. Prioritize up to three markers without changing the cap.
+        if self.app == "lidarr" and self.audio and self.sources != "soulseek":
+            priority = 0
+            for marker in (self.config/"extended/soulseek/fallback").glob("*"):
+                if not marker.name.isdecimal() or not marker.is_file():
+                    continue
+                ident = int(marker.name)
+                if ident in page_ids:
+                    continue
+                job = self.db.execute("SELECT state,next_run FROM jobs WHERE id=?", (ident,)).fetchone()
+                if job and (job["state"] != "waiting" or job["next_run"] > now):
+                    continue
+                try:
+                    records.append(self.arr.call(self.prefix+f"album/{ident}"))
+                except ApiError as error:
+                    if error.status != 404:
+                        raise
+                    marker.unlink(missing_ok=True)
+                    continue
+                priority_markers[ident] = marker
+                page_ids.add(ident)
+                priority += 1
+                if priority >= 3:
+                    break
+        targets = {t["id"]: t for t in self.targets(records)}
+        for ident, marker in priority_markers.items():
+            if ident not in targets:
+                marker.unlink(missing_ok=True)  # No longer a monitored missing item.
+        for row in rows:
+            if row["id"] in page_ids:
+                continue
+            try:
+                record = self.arr.call(self.prefix+f"{kind}/{row['id']}")
+            except ApiError as error:
+                if error.status != 404:
+                    raise
+                continue  # Deleted items are no longer eligible.
+            targets.update({t["id"]: t for t in self.targets([record])})
         with self.db:
             for ident, target in targets.items():
                 self.db.execute("INSERT INTO jobs(id,target,first_seen) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET target=excluded.target,state=CASE WHEN jobs.state='done' THEN 'waiting' ELSE jobs.state END", (ident, json.dumps(target), now))
+            self.db.execute("UPDATE scan SET page=? WHERE id=1", (next_page,))
+        print(f"Soulseek {self.app}: wanted page {page}; {len(records)} of {total} items; {len(targets)} eligible", flush=True)
+        # Only absence from a refreshed record proves completion; absence from a
+        # discovery page must never finish jobs elsewhere in the library.
+        ids = {row["id"] for row in rows} | set(targets)
+        rows = self.db.execute("SELECT * FROM jobs WHERE next_run<=? AND state NOT IN ('done','review') "
+                               "AND id IN (" + ",".join("?" for _ in ids) + ") "
+                               "ORDER BY CASE WHEN state='waiting' THEN 1 ELSE 0 END,first_seen,id",
+                               (now, *sorted(ids))).fetchall() if ids else []
+        rows.sort(key=lambda row: (row["state"] == "waiting",
+                                  row["id"] not in priority_markers,
+                                  row["first_seen"], row["id"]))
         searches = 0
         active = self.db.execute("SELECT count(*) FROM jobs WHERE state IN ('searching','enqueueing','downloading','downloaded','importing')").fetchone()[0]
-        for row in self.db.execute("SELECT * FROM jobs WHERE next_run<=? ORDER BY first_seen,id", (now,)).fetchall():
+        for row in rows:
             ident, state, data = row["id"], row["state"], json.loads(row["data"])
             target = targets.get(ident)
             if target is None:
@@ -398,6 +463,8 @@ class Worker:
             try:
                 if state == "waiting":
                     if searches >= 3 or active >= 3 or not self.ready(row, target):
+                        with self.db:
+                            self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
                         continue
                     searches += 1
                     active += 1

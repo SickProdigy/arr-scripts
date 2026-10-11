@@ -93,6 +93,15 @@ immediately. Items already in the application's download queue are skipped.
 This is a delay-based fallback; it does not run or prove exhaustion of every
 configured indexer search.
 
+The worker reads ten wanted items per pass and stores its page cursor in the
+job database, continuing from that point after a restart. It revisits the first
+page after reaching the end, so newly missing items are picked up on later
+passes. Existing jobs are refreshed separately from discovery; changing pages
+does not complete or abandon a download. Up to three newly eligible streaming
+miss markers are checked directly each pass, even outside the current page.
+The existing limit of three active Soulseek jobs still applies. Progress logs
+show the wanted page, number of items checked, and eligible targets.
+
 ## Import behavior and limits
 
 This is a background wanted-list downloader, not a native Torznab indexer or

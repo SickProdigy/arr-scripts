@@ -372,6 +372,82 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len([p for p, _ in self.slsk.posts if p.endswith("searches")]), 3)
 
+    def test_large_library_starts_searches_before_second_page_and_persists_cursor(self):
+        calls = []
+        original = self.arr.call
+        def paginated(path, data=None, **query):
+            if path.endswith("wanted/missing"):
+                calls.append(query["page"])
+                start = (query["page"]-1)*10+1
+                return {"records": [{**self.arr.movies[0], "id": i} for i in range(start,start+10)], "totalRecords": 74851}
+            if "/movie/" in path:
+                return {**self.arr.movies[0], "id": int(path.rsplit("/",1)[1])}
+            return original(path, data, **query)
+        self.arr.call = paginated
+        self.tick()
+        self.assertEqual(calls, [1])
+        self.assertEqual(len(self.slsk.searches), 3)
+        self.assertEqual(self.worker.db.execute("SELECT count(*) FROM jobs").fetchone()[0], 10)
+        self.worker.db.close()
+        self.worker = soulseek.Worker("radarr", self.arr, self.slsk, self.root, self.root, delay=0, clock=lambda: self.now)
+        self.tick()
+        self.assertEqual(calls, [1,2])
+        self.assertEqual(self.row()["state"], "enqueueing")
+        self.assertEqual(len(self.slsk.searches), 3)
+
+    def test_page_absence_does_not_complete_waiting_job(self):
+        self.worker.delay = 3600
+        self.tick()
+        original = self.arr.call
+        def off_page(path, data=None, **query):
+            if path.endswith("wanted/missing"):
+                return {"records": [], "totalRecords": 0}
+            return original(path,data,**query)
+        self.arr.call = off_page
+        self.tick(3601)
+        self.assertEqual(self.row()["state"], "searching")
+
+    def test_empty_or_final_page_wraps_cursor(self):
+        with self.worker.db:
+            self.worker.db.execute("UPDATE scan SET page=999")
+        original = self.arr.call
+        self.arr.call = lambda path, data=None, **query: {"records": [], "totalRecords": 0} if path.endswith("wanted/missing") else original(path,data,**query)
+        self.tick()
+        self.assertEqual(self.worker.db.execute("SELECT page FROM scan").fetchone()[0], 1)
+
+    def test_failed_page_does_not_advance_cursor_or_submit(self):
+        original = self.arr.call
+        def fail(path,data=None,**query):
+            if path.endswith("wanted/missing"):
+                raise soulseek.ApiError(503)
+            return original(path,data,**query)
+        self.arr.call = fail
+        with self.assertRaises(soulseek.ApiError):
+            self.tick()
+        self.assertEqual(self.worker.db.execute("SELECT page FROM scan").fetchone()[0], 1)
+        self.assertFalse(self.slsk.posts)
+
+    def test_streaming_miss_outside_current_page_is_prioritized(self):
+        self.worker.app, self.worker.prefix = "lidarr", "api/v1/"
+        self.worker.audio, self.worker.sources = True, "all"
+        marker = self.root/"extended/soulseek/fallback/101"
+        marker.parent.mkdir(parents=True)
+        marker.touch()
+        album = dict(id=101, title="Album", monitored=True, releaseDate="2020-01-01", artist={"id": 2,"artistName":"Artist","monitored":True}, releases=[{"id":9,"monitored":True}])
+        def music(path,data=None,**query):
+            if path.endswith("queue") or path.endswith("wanted/missing"):
+                return {"records": [],"totalRecords":74851 if path.endswith("wanted/missing") else 0}
+            if path.endswith("album/101"):
+                return album.copy()
+            if path.endswith("track"):
+                return [{"id":3,"title":"Song","hasFile":False}]
+            raise AssertionError(path)
+        self.arr.call = music
+        self.tick()
+        job = self.worker.db.execute("SELECT state FROM jobs WHERE id=101").fetchone()
+        self.assertEqual(job["state"], "searching")
+        self.assertEqual(len(self.slsk.searches), 1)
+
 
 class ClientTests(unittest.TestCase):
     def test_nicotine_adapter_routes_to_own_api_version(self):
