@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -89,6 +90,8 @@ class Arr:
     def call(self, path, data=None, **query):
         if path.endswith("movie"):
             return self.movies
+        if path.endswith("movie/1"):
+            return self.movies[0]
         if path.endswith("queue"):
             return {"records": self.queue, "totalRecords": len(self.queue)}
         if path.endswith("manualimport"):
@@ -234,8 +237,80 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(self.arr.commands), 1)
         self.assertEqual(self.arr.commands[0]["files"][0]["movieId"], 1)
         self.arr.movies[0]["hasFile"] = True
+        library = self.root/"library"/"Movie.mkv"
+        library.parent.mkdir()
+        library.write_bytes(b"test")
+        self.arr.movies[0]["movieFile"] = {"path": str(library)}
+        # The library must be outside the completed-download root.
+        self.worker.downloads = self.root/"downloads"
+        new_folder = self.worker.downloads/"arr-scripts/radarr"/ident
+        new_folder.parent.mkdir(parents=True)
+        folder.rename(new_folder)
         self.tick()
         self.assertEqual(self.row()["state"], "done")
+        self.assertFalse(new_folder.exists())
+        self.assertTrue(library.is_file())
+
+    def test_cleanup_retains_files_until_library_is_accessible(self):
+        ident = self.reach_batch()
+        folder = self.root/"arr-scripts/radarr"/ident
+        folder.mkdir(parents=True)
+        source = folder/"Movie.2020.1080p.mkv"
+        source.write_bytes(b"test")
+        data = dict(json.loads(self.row()["data"]), command=123)
+        self.worker.save(1, "importing", data)
+        self.arr.movies[0].update(hasFile=True, movieFile={"path": str(self.root/"absent.mkv")})
+        self.tick()
+        self.assertEqual(self.row()["state"], "cleanup")
+        self.assertTrue(source.is_file())
+
+    def test_cleanup_never_deletes_after_failed_command(self):
+        ident = self.reach_batch()
+        data = dict(json.loads(self.row()["data"]), command=123)
+        self.worker.save(1, "importing", data)
+        self.arr.movies[0]["hasFile"] = True
+        original = self.arr.call
+        self.arr.call = lambda path, *args, **kwargs: {"status": "failed"} if path.endswith("command/123") else original(path, *args, **kwargs)
+        self.tick()
+        self.assertEqual(self.row()["state"], "cleanup")
+
+    def test_cleanup_all_apps_retains_unrecognized_files_and_retries_partial_cleanup(self):
+        import uuid
+        for app in ("lidarr", "sonarr", "radarr"):
+            with self.subTest(app=app):
+                self.worker.app = app
+                self.worker.downloads = self.root/"downloads"
+                batch = str(uuid.uuid4())
+                folder = self.worker.downloads/"arr-scripts"/app/batch
+                folder.mkdir(parents=True)
+                source = folder/"Song.flac"
+                source.write_bytes(b"test")
+                extra = folder/"personal.txt"
+                extra.write_text("keep")
+                library = self.root/"library.flac"
+                library.write_bytes(b"test")
+                def call(path, *args, **kwargs):
+                    if "/command/" in path:
+                        return {"status": "completed"}
+                    if path.endswith("track"):
+                        return [{"id": 3, "trackFileId": 4}]
+                    if "/trackfile/" in path:
+                        return {"path": str(library)}
+                    kind = "movie" if app == "radarr" else "episode"
+                    return {"hasFile": True, kind+"File": {"path": str(library)}}
+                self.arr.call = call
+                data = {"command": 123, "batch": batch, "files": [{"filename": "Album\\Song.flac", "size": 4}]}
+                target = {"id": 1, "missingTrackIds": [3]}
+                source.write_bytes(b"changed")
+                with self.assertRaises(ValueError):
+                    self.worker.cleanup_import(target, data)
+                self.assertTrue(source.exists())
+                source.write_bytes(b"test")
+                self.worker.cleanup_import(target, data)
+                self.worker.cleanup_import(target, data)
+                self.assertFalse(source.exists())
+                self.assertTrue(extra.exists())
+                self.assertTrue(library.exists())
 
     def test_completed_transfer_without_file_never_imports(self):
         ident = self.reach_batch()

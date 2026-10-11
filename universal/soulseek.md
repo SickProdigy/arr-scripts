@@ -84,8 +84,12 @@ Completed downloads are isolated under `arr-scripts/<app>/<batch UUID>` inside
 the shared download directory. The worker checks successful transfer states and
 file sizes, requests the application's manual-import decisions, and submits
 only matching identities without import rejections. It never forces a rejected
-import or automatically replaces existing files. Import uses copy mode, preserving
-the Soulseek download. Filename matching happens before downloading; full file
+import or automatically replaces existing files. Import uses copy mode. Once the
+import command succeeds, the item leaves the wanted list, and the library files
+are accessible, the worker deletes only its recorded batch source files. Personal
+downloads and unrecognized files are untouched; empty batch folders are removed.
+Unavailable library files, changed sources, or uncertain imports retain downloads
+and retry cleanup after five minutes. Filename matching happens before downloading; full file
 quality/language/custom-format decisions happen after downloading and may reject
 the result. Native import notifications continue to run configured Arr scripts.
 

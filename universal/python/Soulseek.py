@@ -295,6 +295,64 @@ class Worker:
         delay = 0 if self.app == "lidarr" and self.sources == "soulseek" else self.delay
         return self.clock()-row["first_seen"] >= delay
 
+    def cleanup_import(self, target, data):
+        """Verify the accepted command and library before deleting owned sources."""
+        if "command" not in data:
+            raise ValueError("Import acknowledgement unavailable")
+        command = self.arr.call(self.prefix+f"command/{data['command']}")
+        if command.get("status") != "completed":
+            raise ValueError("Import has not succeeded")
+        if self.app == "lidarr":
+            tracks = self.arr.call(self.prefix+"track", albumId=target["id"])
+            indexed = {track["id"]: track for track in tracks}
+            library = []
+            for ident in target["missingTrackIds"]:
+                track = indexed.get(ident, {})
+                if not track.get("trackFileId"):
+                    raise ValueError("Imported track missing")
+                library.append(self.arr.call(self.prefix+f"trackfile/{track['trackFileId']}"))
+        else:
+            kind = "movie" if self.app == "radarr" else "episode"
+            item = self.arr.call(self.prefix+f"{kind}/{target['id']}")
+            if not item.get("hasFile"):
+                raise ValueError("Imported library item missing")
+            file = item.get(kind+"File")
+            if not file:
+                file = self.arr.call(self.prefix+f"{kind}file/{item[kind+'FileId']}")
+            library = [file]
+        # Only UUID-owned batches may be cleaned; never follow directory symlinks.
+        batch = str(uuid.UUID(data["batch"]))
+        if batch != data["batch"]:
+            raise ValueError("Invalid batch directory")
+        folder = self.downloads / "arr-scripts" / self.app / batch
+        for directory in (self.downloads, self.downloads/"arr-scripts", folder.parent, folder):
+            if directory.is_symlink():
+                raise ValueError("Symlinked download directory")
+        for file in library:
+            path = Path(file["path"])
+            if not path.is_absolute() or path.resolve().is_relative_to(self.downloads.resolve()):
+                raise ValueError("Library file is inside download root")
+            if not path.is_file() or path.stat().st_size <= 0:
+                raise ValueError("Library file unavailable")
+        sources = []
+        for file in data["files"]:
+            name = file["filename"]
+            if not safe_remote(name):
+                raise ValueError("Invalid source filename")
+            path = folder / PureWindowsPath(name).name
+            if path.is_symlink():
+                raise ValueError("Symlinked source file")
+            if path.exists():
+                if not path.is_file() or path.stat().st_size != file["size"]:
+                    raise ValueError("Source file changed")
+                if any(path.samefile(Path(item["path"])) for item in library):
+                    raise ValueError("Source is the library file")
+                sources.append(path)
+        for path in sources:
+            path.unlink()
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+
     def tick(self):
         version = self.slsk.call("api/v0/application/version")
         if isinstance(version, dict):
@@ -325,6 +383,13 @@ class Worker:
             ident, state, data = row["id"], row["state"], json.loads(row["data"])
             target = targets.get(ident)
             if target is None:
+                if state in ("importing", "cleanup"):
+                    try:
+                        self.cleanup_import(data.get("importTarget", json.loads(row["target"])), data)
+                    except (ApiError, ValueError, KeyError, TypeError, OSError) as error:
+                        print(f"Soulseek {self.app}: item {ident}: cleanup {type(error).__name__}; retained", flush=True)
+                        self.save(ident, "cleanup", data, 300)
+                        continue
                 if state != "done":
                     self.save(ident, "done", data)
                 continue
@@ -396,6 +461,7 @@ class Worker:
                         self.save(ident, "review", {**data, "reason": "import rejected or identity mismatch"})
                         continue
                     # A lost response may have accepted the import: don't blindly resubmit.
+                    data["importTarget"] = target
                     self.save(ident, "importing", data, 60)
                     result = self.arr.call(self.prefix+"command", payload)
                     data["command"] = result["id"]
