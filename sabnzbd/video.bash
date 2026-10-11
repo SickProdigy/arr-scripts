@@ -1,9 +1,9 @@
 #!/bin/bash
-scriptVersion="3.6"
+scriptVersion="3.7"
 scriptName="Video"
 
 #### Import Settings
-source /config/extended.conf
+source "${ARR_EXTENDED_CONF:-/config/extended.conf}"
 
 log () {
   m_time=`date "+%F %T"`
@@ -345,6 +345,11 @@ function Main {
       arrApiKey="$sonarranimeArrApiKey"
     fi
 
+    if [ "${letTdarrHandleVideo:-false}" == "true" ]; then
+        log "Tdarr handles video processing; preserving downloaded files for Arr import"
+        VideoFileCheck "$folderpath"
+        return 0
+    fi
 	Configuration
 	VideoFileCheck "$folderpath"
 	DeleteLocalArtwork "$folderpath"

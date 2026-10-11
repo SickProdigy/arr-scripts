@@ -1,5 +1,5 @@
 #!/bin/bash
-scriptVersion="6.6"
+scriptVersion="6.7"
 scriptName="Video-Processor"
 dockerPath="/config/logs"
 
@@ -16,6 +16,18 @@ sonarranimeUrl="http://:8990" # Set category in SABnzbd to: sonarr-anime
 sonarranimeApiKey="" # Set category in SABnzbd to: sonarr-anime
 radarrUrl="http://radarr:7878" # Set category in SABnzbd to: radarr
 radarrApiKey=""  # Set category in SABnzbd to: radarr
+
+# Use the shared SABnzbd settings when present; keep standalone defaults.
+letTdarrHandleVideo="${letTdarrHandleVideo:-false}"
+if [ -f "${ARR_EXTENDED_CONF:-/config/extended.conf}" ]; then
+  source "${ARR_EXTENDED_CONF:-/config/extended.conf}"
+fi
+sonarrUrl="${sonarrArrUrl:-$sonarrUrl}"
+sonarrApiKey="${sonarrArrApiKey:-$sonarrApiKey}"
+sonarranimeUrl="${sonarranimeArrUrl:-$sonarranimeUrl}"
+sonarranimeApiKey="${sonarranimeArrApiKey:-$sonarranimeApiKey}"
+radarrUrl="${radarrArrUrl:-$radarrUrl}"
+radarrApiKey="${radarrArrApiKey:-$radarrApiKey}"
 
 set -e
 
@@ -511,6 +523,20 @@ MAIN () {
   skipStatistics="false"
   log "Script: $scriptName :: Version ($scriptVersion)"
   #log "$filePath :: $downloadId :: Processing"
+  if [ "$letTdarrHandleVideo" == "true" ]; then
+    log "Tdarr handles video processing; preserving downloaded files for Arr import"
+    if ! find "$filePath" -type f -regex ".*/.*\\.\\(m4v\\|wmv\\|mkv\\|mp4\\|avi\\)" | read; then
+      log "FILE CHECK :: ERROR :: No video files found for import"
+      return 1
+    fi
+    arrApiKeySelect
+    if [ -n "${arrUrl:-}" ] && [ -n "${arrApiKey:-}" ]; then
+      arrRefreshMonitoredDownloads
+    else
+      log "Arr refresh is not configured; normal completed-download handling will pick up this job"
+    fi
+    return 0
+  fi
   installDependencies
   arrApiKeySelect
 
