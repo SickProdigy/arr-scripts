@@ -495,11 +495,12 @@ class Worker:
         if not any(folder.iterdir()):
             folder.rmdir()
 
-    def discard(self, ident):
+    def discard(self, ident, cancelled=False):
         """Remove only recorded, finished batch files; keep a retryable tombstone."""
-        row = self.db.execute("SELECT * FROM jobs WHERE id=? AND state='review'", (ident,)).fetchone()
+        states = ("review","downloading","enqueueing") if cancelled else ("review",)
+        row = self.db.execute("SELECT * FROM jobs WHERE id=? AND state IN (" + ",".join("?" for _ in states) + ")", (ident,*states)).fetchone()
         if not row:
-            raise ValueError("Job is not awaiting review")
+            raise ValueError("Job is not eligible for discard")
         data = json.loads(row["data"])
         if "handoff" in data:
             raise ValueError("Remove this download through Lidarr's Activity queue")
@@ -520,7 +521,7 @@ class Worker:
             transfers = remote.get("transfers") or []
             if {(f["filename"], f["size"]) for f in transfers} != expected or not transfers:
                 raise ValueError("Batch ownership cannot be verified; retained")
-            if any(not f.get("state", "").startswith("Completed") for f in transfers):
+            if not cancelled and any(not f.get("state", "").startswith("Completed") for f in transfers):
                 raise ValueError("Transfers are still active; retained")
             folder = self.batch_folder(data)
             if not folder.resolve().is_relative_to(self.downloads.resolve()):
@@ -540,7 +541,7 @@ class Worker:
             path.unlink()
         if folder and folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
-        self.save(ident, "discarded", {"reason": data.get("reason", "manually discarded")})
+        self.save(ident, "discarded", {"reason": "cancelled by user" if cancelled else data.get("reason", "manually discarded")})
 
     def tick(self):
         version = self.slsk.call("api/v0/application/version")
@@ -766,7 +767,10 @@ def main():
     actions.add_argument("--discard", type=int, help="Discard a reviewed job and its finished batch files")
     parser.add_argument("--owns", type=int, help="Local-only check: exit 0 if Soulseek owns this active job")
     parser.add_argument("--diagnose", action="store_true", help="Read-only API and wanted-item diagnostics, independent of the worker lock")
+    parser.add_argument("--cancelled", action="store_true", help="With --discard: confirm transfers were already cancelled and cleared in the client")
     args = parser.parse_args()
+    if args.cancelled and args.discard is None:
+        parser.error("--cancelled requires --discard")
     config = os.environ.get("SOULSEEK_CONFIG_DIR", "/config")
     if args.owns is not None:
         database = Path(config)/"extended/soulseek/jobs.sqlite"
@@ -814,6 +818,9 @@ def main():
         return
     with worker_lock(config) as acquired:
         if not acquired:
+            if args.discard is not None or args.retry is not None:
+                print("Soulseek: worker busy; rerun this command after the current pass", flush=True)
+                raise SystemExit(1)
             return
         worker = Worker(app, Api(url, key), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
@@ -821,7 +828,7 @@ def main():
                         imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None)
         try:
             if args.discard is not None:
-                worker.discard(args.discard)
+                worker.discard(args.discard, cancelled=args.cancelled)
                 return  # Discard must never start unrelated searches.
             if args.retry is not None:
                 row = worker.db.execute("SELECT * FROM jobs WHERE id=? AND state IN ('review','discarded')", (args.retry,)).fetchone()

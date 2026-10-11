@@ -468,6 +468,26 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.worker.batch_folder({"batch":batch,"destination":"../"+batch})
 
+    def test_cancelled_discard_clears_client_removed_queued_job(self):
+        folder,source,data = self.reviewed_batch()
+        self.slsk.batches[data["batch"]]["transfers"][0]["state"] = "Queued"
+        self.worker.save(1,"downloading",data)
+        with self.assertRaises(ValueError):
+            self.worker.discard(1)
+        self.worker.discard(1,cancelled=True)
+        self.assertFalse(folder.exists())
+        self.assertEqual(self.row()["state"],"discarded")
+        self.tick(86401)
+        self.assertEqual(len(self.slsk.searches),1)
+
+    def test_cancelled_flag_does_not_override_uncertain_import(self):
+        folder,source,data = self.reviewed_batch()
+        data["importTarget"] = {"id":1}
+        self.worker.save(1,"review",data)
+        with self.assertRaises(ValueError):
+            self.worker.discard(1,cancelled=True)
+        self.assertTrue(source.exists())
+
     def test_large_library_starts_searches_before_second_page_and_persists_cursor(self):
         calls = []
         original = self.arr.call

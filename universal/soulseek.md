@@ -168,6 +168,13 @@ active transfers, and uncertain imports are retained. The job becomes
 `discarded`, preventing automatic re-download; `--retry 123` starts it afresh.
 Discard itself never starts another search. Batch history remains in the client.
 
+If you already cancelled and cleared a queued batch in Nicotine's GUI, use
+`--discard ITEM_ID --cancelled` to clean its recorded files and release the
+worker slot. This also accepts jobs still marked downloading/enqueueing in the
+worker. The flag confirms cancellation you performed; it does not cancel remote
+transfers. It retains all ownership/path checks and will not discard uncertain
+imports or albums handed to Lidarr's Activity queue.
+
 Failed transfers, partial batches, ambiguous imports and uncertain import replies
 enter `review` state and are logged by item ID. Files are retained. After fixing
 the cause, use `ARR_SOULSEEK_APP=lidarr bash /config/extended/Soulseek.bash --retry 123`
