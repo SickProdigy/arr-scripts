@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.18"
+scriptVersion="1.4.19"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -46,7 +46,7 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   jellyfish \
   beautifulsoup4 \
   yt-dlp \
-  "beets[lyrics]" \
+  beets \
   yq \
   pyxDamerauLevenshtein \
   pyacoustid \
@@ -113,7 +113,13 @@ curl -sfL "${arrScriptsRawBase%/}/lidarr/Ratings.service.bash" -o /custom-servic
 chmod +x /custom-services.d/Ratings
 curl -sfL "${arrScriptsRawBase%/}/lidarr/BeetsLyrics.bash" -o /config/extended/BeetsLyrics.bash
 mkdir -p /config/extended/python
-curl -sfL "${arrScriptsRawBase%/}/lidarr/python/BeetsLyrics.py" -o /config/extended/python/BeetsLyrics.py
+curl -sfL "${arrScriptsRawBase%/}/lidarr/Lyrics.bash" -o /config/extended/Lyrics.bash
+curl -sfL "${arrScriptsRawBase%/}/lidarr/Lyrics.service.bash" -o /custom-services.d/Lyrics
+curl -sfL "${arrScriptsRawBase%/}/lidarr/python/Lyrics.py" -o /config/extended/python/Lyrics.py
+chmod +x /custom-services.d/Lyrics
+mkdir -p /config/extended/lyrics
+chown "${PUID:-1000}:${PGID:-1000}" /config/extended/lyrics
+chmod 2775 /config/extended/lyrics
 
 
 if [ ! -f /config/extended/beets-config.yaml ]; then
@@ -163,6 +169,7 @@ sed -i 's/__APP__/lidarr/g' /custom-services.d/Soulseek
 chmod +x /custom-services.d/Soulseek
 
 chmod 777 -R /config/extended
+chmod 2775 /config/extended/lyrics
 chmod 777 -R /root
 
 if [ -f /custom-services.d/scripts_init.bash ]; then

@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.53"
+scriptVersion="2.54"
 scriptName="Audio"
 
 ### Import Settings
@@ -1030,7 +1030,7 @@ ProcessWithBeets () {
 	fi	
 
 	if [ "${beetsImportStatus:-1}" = "0" ]; then
-		bash /config/extended/BeetsLyrics.bash /config/extended/beets-config.yaml /config/extended/beets-library.blb "$1" 2>&1 | tee -a "/config/logs/$logFileName"
+		bash /config/extended/Lyrics.bash "$1" "${wantedAlbumId:-}" 2>&1 | tee -a "/config/logs/$logFileName"
 	fi
 
 	if [ -f "/config/beets-match" ]; then 
