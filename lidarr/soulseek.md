@@ -67,11 +67,27 @@ unavailable streaming clients can fall back after the default one-hour delay.
 
 ## Imports and cleanup
 
-Nicotine manages its own transfers; completed batches are imported through
-Lidarr's API rather than placed in the Deezer/TIDAL blackhole import folder.
-The worker verifies successful imports and accessible library files before
-deleting its source files. Failed/uncertain imports and personal downloads are
-retained. This avoids keeping a second copy after a verified import.
+Nicotine manages its own transfers. Completed albums are staged outside the
+watch folder, then published atomically into `importPath`, using the existing
+**Arr-Extended / Usenet Blackhole** client. An enabled blackhole client must
+watch that same path, including for Soulseek-only setups. The worker requests a
+native download refresh; it does not submit a competing direct import.
 
-See the [shared guide](../universal/soulseek.md) for matching limits, fallback
-timing, recovery commands, and validation status.
+Soulseek albums appear in **Activity -> Queue** when ready for Lidarr, like
+Tidal/Deezer. Successfully imported albums disappear. Rejected albums remain
+available for manual import or removal with **delete files** selected. The
+single Soulseek slot remains occupied until you resolve that album, preventing
+a stack of additional rejected downloads. Tidal and Deezer continue separately.
+The blackhole client does not report Nicotine's live transfer/start status.
+
+Folders use `Artist-Album (Year) [Soulseek]` unless Lidarr recognizes an existing
+release group, which is preserved instead. Library filenames show that group
+when it is included in Lidarr's renaming format. There is only one completed
+copy after a successful handoff; temporary staging copies are removed from the
+Soulseek batch. The worker verifies final library files before cleaning any
+remaining handed-off files. Personal downloads and unknown files are preserved.
+
+Older direct-import failures remain in `review`. To hand one to the new queue,
+run `ARR_SOULSEEK_APP=lidarr bash /config/extended/Soulseek.bash --retry ITEM_ID`.
+The existing `--discard ITEM_ID` command still handles those older reviewed
+batches. New handed-off albums are removed through Lidarr's Activity queue.

@@ -114,6 +114,14 @@ track list from one peer. Movies require matching title/year filenames. TV
 requires standard `SxxExx` naming; daily episodes, anime absolute numbering and
 season packs are skipped. Conservative matching can miss valid releases.
 
+For Lidarr, completed albums use the existing Usenet Blackhole client watching
+`importPath`, matching the Tidal/Deezer Activity queue workflow. Publication is
+atomic: incomplete audio never enters that folder. Import failures hold the
+single Soulseek slot until resolved through Lidarr; successful imports disappear
+and removal with delete-files selected releases the slot without re-downloading
+that job. See the [Lidarr guide](../lidarr/soulseek.md). The remaining direct-import
+behavior below applies to Sonarr/Radarr and older reviewed Lidarr jobs.
+
 Completed downloads are isolated under `arr-scripts/<app>/<batch UUID>` inside
 the shared download directory. The worker checks successful transfer states and
 file sizes, requests the application's manual-import decisions, and submits

@@ -14,6 +14,7 @@ import os
 from pathlib import Path, PureWindowsPath
 import re
 import sqlite3
+import shutil
 import time
 import unicodedata
 from urllib.error import HTTPError, URLError
@@ -195,7 +196,8 @@ def import_payload(app, target, decisions, folder):
 
 
 class Worker:
-    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time):
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None):
+        self.imports = Path(imports) if imports else None
         self.app, self.arr, self.slsk = app, arr, slsk
         self.config, self.downloads = Path(config), Path(downloads)
         self.delay, self.sources, self.audio, self.clock = delay, sources, audio, clock
@@ -264,7 +266,7 @@ class Worker:
                 missing = [t["id"] for t in tracks if not t.get("hasFile") and not t.get("trackFileId")]
                 if not tracks or not missing:
                     continue
-                target = dict(app=self.app, id=ident, title=record["title"], artist=artist["artistName"], artistId=artist["id"], tracks=tracks, missingTrackIds=missing)
+                target = dict(app=self.app, id=ident, title=record["title"], artist=artist["artistName"], artistId=artist["id"], tracks=tracks, missingTrackIds=missing, releaseDate=record.get("releaseDate"))
                 target["query"] = f"{target['artist']} {target['title']}"
             yield target
 
@@ -305,11 +307,12 @@ class Worker:
 
     def cleanup_import(self, target, data):
         """Verify the accepted command and library before deleting owned sources."""
-        if "command" not in data:
-            raise ValueError("Import acknowledgement unavailable")
-        command = self.arr.call(self.prefix+f"command/{data['command']}")
-        if command.get("status") != "completed":
-            raise ValueError("Import has not succeeded")
+        if "handoff" not in data:
+            if "command" not in data:
+                raise ValueError("Import acknowledgement unavailable")
+            command = self.arr.call(self.prefix+f"command/{data['command']}")
+            if command.get("status") != "completed":
+                raise ValueError("Import has not succeeded")
         if self.app == "lidarr":
             tracks = self.arr.call(self.prefix+"track", albumId=target["id"])
             indexed = {track["id"]: track for track in tracks}
@@ -340,6 +343,8 @@ class Worker:
             path = Path(file["path"])
             if not path.is_absolute() or path.resolve().is_relative_to(self.downloads.resolve()):
                 raise ValueError("Library file is inside download root")
+            if self.imports and path.resolve().is_relative_to(self.imports.resolve()):
+                raise ValueError("Library file is still in import root")
             if not path.is_file() or path.stat().st_size <= 0:
                 raise ValueError("Library file unavailable")
         sources = []
@@ -361,12 +366,127 @@ class Worker:
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
 
+    def handoff(self, target, data, folder):
+        """Publish a completed album atomically to Lidarr's existing watch folder."""
+        if self.app != "lidarr" or self.imports is None:
+            raise ValueError("Watched-folder handoff is only configured for Lidarr")
+        if not self.imports.is_absolute() or self.imports.is_symlink():
+            raise ValueError("Invalid import root")
+        new_root = not self.imports.exists()
+        self.imports.mkdir(parents=True, exist_ok=True)
+        if new_root:
+            self.imports.chmod(0o775)
+            if hasattr(os,"geteuid") and os.geteuid() == 0:
+                os.chown(self.imports,int(os.environ.get("PUID","1000")),int(os.environ.get("PGID","1000")))
+        # Ask Lidarr to identify the release group, including rejected decisions.
+        # Native completed-download handling owns the final import decision.
+        clients = self.arr.call(self.prefix+"downloadclient")
+        if not any(client.get("enable") and client.get("implementation") == "UsenetBlackhole"
+                   and any(field.get("name") == "watchFolder" and field.get("value") == str(self.imports)
+                           for field in client.get("fields", [])) for client in clients):
+            raise ValueError("Enable a Usenet Blackhole client watching importPath")
+        decisions = self.arr.call(self.prefix+"manualimport", folder=str(folder), filterExistingFiles="true")
+        groups = {item.get("releaseGroup") for item in decisions if item.get("releaseGroup")}
+        group = next(iter(groups)) if len(groups) == 1 else "Soulseek"
+        def clean(value):
+            return re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(value)).strip(' .')[:100] or "Unknown"
+        year = str(target.get("releaseDate", ""))[:4]
+        name = f"{clean(target['artist'])}-{clean(target['title'])}"
+        if year.isdecimal():
+            name += f" ({year})"
+        name += f" [{clean(group)}]"
+        destination = self.imports/name
+        staging = self.imports.parent/(".soulseek-"+str(uuid.UUID(data["batch"])))
+        owner = {"batch":data["batch"], "app":self.app, "id":target["id"]}
+        marker = ".arr-soulseek.json"
+        if destination.exists():
+            if destination.is_symlink() or (destination/marker).is_symlink() or not (destination/marker).is_file() or json.loads((destination/marker).read_text()) != owner:
+                raise ValueError("Import folder already belongs to another download")
+        else:
+            if staging.is_symlink():
+                raise ValueError("Symlinked staging directory")
+            staging.mkdir(exist_ok=True)
+            ownership = staging/marker
+            if ownership.exists():
+                if ownership.is_symlink() or json.loads(ownership.read_text()) != owner:
+                    raise ValueError("Staging ownership mismatch")
+            else:
+                if any(staging.iterdir()):
+                    raise ValueError("Unowned staging directory")
+                ownership.write_text(json.dumps(owner))
+            # The downloader worker may run as root, but Lidarr imports as abc.
+            def writable(path, directory=False):
+                path.chmod(0o775 if directory else 0o664)
+                if hasattr(os, "geteuid") and os.geteuid() == 0:
+                    os.chown(path, int(os.environ.get("PUID", "1000")), int(os.environ.get("PGID", "1000")))
+            writable(staging, True)
+            writable(ownership)
+            for file in data["files"]:
+                source = folder/PureWindowsPath(file["filename"]).name
+                dest = staging/source.name
+                if source.is_symlink() or dest.is_symlink():
+                    raise ValueError("Symlinked batch file")
+                shutil.copy2(source,dest)
+                writable(dest)
+                if dest.stat().st_size != file["size"]:
+                    raise ValueError("Staging size mismatch")
+            data["handoff"] = str(destination)
+            data["importTarget"] = target
+            self.save(target["id"], "publishing", data)
+            os.rename(staging,destination)
+        data["handoff"] = str(destination)
+        data["importTarget"] = target
+        # Persist the handoff before asking Arr to refresh. The worker must not
+        # issue a competing direct import or republish a removed queue item.
+        self.save(target["id"], "handoff", data, 60)
+        # The published folder is now the sole completed-download copy, just as
+        # for streaming providers. Never remove an original without its copy.
+        for file in data["files"]:
+            source = folder/PureWindowsPath(file["filename"]).name
+            copied = destination/source.name
+            if source.is_symlink() or copied.is_symlink() or not copied.is_file() or copied.stat().st_size != file["size"]:
+                raise ValueError("Published batch changed; retained originals")
+            if source.exists():
+                if not source.is_file() or source.stat().st_size != file["size"]:
+                    raise ValueError("Original batch changed; retained")
+                source.unlink()
+        if not any(folder.iterdir()):
+            folder.rmdir()
+        self.arr.call(self.prefix+"command", {"name":"RefreshMonitoredDownloads"})
+
+    def cleanup_handoff(self, target, data):
+        """Verify the library using the existing cleanup before removing copies."""
+        # Native handoff has no worker-owned ManualImport command. Completion
+        # still requires every intended track to be present in the library.
+        self.cleanup_import(target, data)
+        folder = Path(data["handoff"])
+        if folder.is_symlink() or not self.imports or folder.parent.resolve() != self.imports.resolve():
+            raise ValueError("Invalid handed-off folder")
+        if not folder.exists():
+            return
+        marker = folder/".arr-soulseek.json"
+        if marker.is_symlink() or not marker.is_file() or json.loads(marker.read_text()).get("batch") != data["batch"]:
+            raise ValueError("Handoff ownership mismatch")
+        for file in data["files"]:
+            path = folder/PureWindowsPath(file["filename"]).name
+            if path.is_symlink():
+                raise ValueError("Symlinked handoff file")
+            if path.exists():
+                if not path.is_file() or path.stat().st_size != file["size"]:
+                    raise ValueError("Handed-off source changed")
+                path.unlink()
+        marker.unlink()
+        if not any(folder.iterdir()):
+            folder.rmdir()
+
     def discard(self, ident):
         """Remove only recorded, finished batch files; keep a retryable tombstone."""
         row = self.db.execute("SELECT * FROM jobs WHERE id=? AND state='review'", (ident,)).fetchone()
         if not row:
             raise ValueError("Job is not awaiting review")
         data = json.loads(row["data"])
+        if "handoff" in data:
+            raise ValueError("Remove this download through Lidarr's Activity queue")
         if "importTarget" in data and "command" not in data:
             raise ValueError("Import outcome is uncertain; retained")
         if "command" in data:
@@ -492,14 +612,18 @@ class Worker:
                                   row["id"] not in priority_markers,
                                   row["first_seen"], row["id"]))
         searches = 0
-        active = self.db.execute("SELECT count(*) FROM jobs WHERE state IN ('searching','enqueueing','downloading','downloaded','importing')").fetchone()[0]
+        active = self.db.execute("SELECT count(*) FROM jobs WHERE state IN ('searching','enqueueing','downloading','downloaded','importing','handoff','publishing')").fetchone()[0]
         for row in rows:
             ident, state, data = row["id"], row["state"], json.loads(row["data"])
             target = targets.get(ident)
             if target is None:
-                if state in ("importing", "cleanup"):
+                if state in ("importing", "cleanup", "handoff", "publishing"):
                     try:
-                        self.cleanup_import(data.get("importTarget", json.loads(row["target"])), data)
+                        original = data.get("importTarget", json.loads(row["target"]))
+                        if "handoff" in data:
+                            self.cleanup_handoff(original, data)
+                        else:
+                            self.cleanup_import(original, data)
                     except (ApiError, ValueError, KeyError, TypeError, OSError) as error:
                         print(f"Soulseek {self.app}: item {ident}: cleanup {type(error).__name__}; retained", flush=True)
                         self.save(ident, "cleanup", data, 300)
@@ -507,7 +631,7 @@ class Worker:
                 if state != "done":
                     self.save(ident, "done", data)
                 continue
-            if state in ("done", "review") or self.blocked(target, queue):
+            if state in ("done", "review") or (state not in ("handoff","publishing") and self.blocked(target, queue)):
                 continue
             try:
                 if state == "waiting":
@@ -563,7 +687,7 @@ class Worker:
                         self.save(ident, "downloaded", data)
                     elif any("Completed" in f["state"] and "Succeeded" not in f["state"] for f in transfers):
                         self.save(ident, "review", {**data, "reason": "failed transfer"})
-                elif state == "downloaded":
+                elif state in ("downloaded","publishing"):
                     folder = self.downloads / "arr-scripts" / self.app / data["batch"]
                     if not folder.is_dir():
                         raise ValueError("Download mount unavailable")
@@ -571,6 +695,9 @@ class Worker:
                         local = (folder / PureWindowsPath(file["filename"]).name).resolve()
                         if not local.is_relative_to(folder.resolve()) or not local.is_file() or local.stat().st_size != file["size"]:
                             raise ValueError("Completed files unavailable or size mismatch")
+                    if self.app == "lidarr" and self.imports is not None:
+                        self.handoff(target, data, folder)
+                        continue
                     decisions = self.arr.call(self.prefix+"manualimport", folder=str(folder), filterExistingFiles="true")
                     payload = import_payload(self.app, target, decisions, folder)
                     if not payload:
@@ -582,6 +709,13 @@ class Worker:
                     result = self.arr.call(self.prefix+"command", payload)
                     data["command"] = result["id"]
                     self.save(ident, "importing", data, 60)
+                elif state == "handoff":
+                    owned = [entry for entry in queue if entry.get("outputPath") == data["handoff"]]
+                    if owned:
+                        continue  # Lidarr owns import, removal, and manual retry.
+                    if not Path(data["handoff"]).exists():
+                        self.save(ident, "discarded", {"reason":"removed from Lidarr before import"})
+                    # It may not be visible until the next native queue refresh.
                 elif state == "importing":
                     if "command" not in data:
                         self.save(ident, "review", {**data, "reason": "uncertain import; inspect library"})
@@ -629,7 +763,7 @@ def main():
                 row = connection.execute("SELECT state FROM jobs WHERE id=?", (args.owns,)).fetchone()
         except sqlite3.Error:
             raise SystemExit(0)  # Unreadable state: avoid racing an uncertain job.
-        raise SystemExit(0 if row and row[0] in ("searching", "enqueueing", "downloading", "downloaded", "importing") else 1)
+        raise SystemExit(0 if row and row[0] in ("searching", "enqueueing", "downloading", "downloaded", "importing", "handoff", "publishing") else 1)
     app = os.environ["SOULSEEK_APP"]
     if app not in ("lidarr", "sonarr", "radarr"):
         raise ValueError("Unsupported Arr application")
@@ -669,7 +803,8 @@ def main():
             return
         worker = Worker(app, Api(url, key), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
-                        os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true")
+                        os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true",
+                        imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None)
         try:
             if args.discard is not None:
                 worker.discard(args.discard)

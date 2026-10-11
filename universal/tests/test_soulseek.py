@@ -531,6 +531,123 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(self.slsk.searches), 1)
 
 
+class HandoffTests(unittest.TestCase):
+    def setUp(self):
+        import uuid
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.arr = Arr()
+        self.slsk = Soulseek()
+        self.worker = soulseek.Worker("lidarr",self.arr,self.slsk,self.root,self.root/"downloads",delay=0,imports=self.root/"import")
+        self.batch = str(uuid.uuid4())
+        self.folder = self.worker.downloads/"arr-scripts/lidarr"/self.batch
+        self.folder.mkdir(parents=True)
+        self.source = self.folder/"Song.flac"
+        self.source.write_bytes(b"test")
+        self.target = dict(id=1,app="lidarr",title="Album",artist="Artist",artistId=2,tracks=[{"id":3,"title":"Song"}],missingTrackIds=[3],releaseDate="2020-01-01")
+        self.data = dict(batch=self.batch, files=[{"filename":"Artist\\Album\\Song.flac","size":4}])
+        with self.worker.db:
+            self.worker.db.execute("INSERT INTO jobs(id,target,first_seen) VALUES(1,?,0)",(json.dumps(self.target),))
+        original = self.arr.call
+        def call(path,data=None,**query):
+            if path.endswith("downloadclient"):
+                return [{"enable":True,"implementation":"UsenetBlackhole","fields":[{"name":"watchFolder","value":str(self.worker.imports)}]}]
+            return original(path,data,**query)
+        self.arr.call = call
+
+    def tearDown(self):
+        self.worker.db.close()
+        self.temp.cleanup()
+
+    def test_completed_handoff_publishes_only_full_album_and_preserves_group(self):
+        self.arr.decisions = [{"releaseGroup":"OriginalGroup","rejections":[{"reason":"identity mismatch"}]}]
+        self.worker.handoff(self.target,self.data,self.folder)
+        published = Path(self.data["handoff"])
+        self.assertEqual(published.name,"Artist-Album (2020) [OriginalGroup]")
+        self.assertEqual((published/"Song.flac").read_bytes(),b"test")
+        self.assertFalse(self.folder.exists())
+        self.assertEqual(self.arr.commands,[{"name":"RefreshMonitoredDownloads"}])
+        self.assertEqual(self.worker.db.execute("SELECT state FROM jobs").fetchone()[0],"handoff")
+
+    def test_default_group_and_same_name_collision_never_overwrite(self):
+        destination = self.worker.imports/"Artist-Album (2020) [Soulseek]"
+        destination.mkdir(parents=True)
+        personal = destination/"personal.txt"
+        personal.write_text("keep")
+        with self.assertRaises(ValueError):
+            self.worker.handoff(self.target,self.data,self.folder)
+        self.assertTrue(self.source.exists())
+        self.assertEqual(personal.read_text(),"keep")
+
+    def test_no_watched_client_retains_download(self):
+        original = self.arr.call
+        self.arr.call = lambda path,*args,**kwargs: [] if path.endswith("downloadclient") else original(path,*args,**kwargs)
+        with self.assertRaises(ValueError):
+            self.worker.handoff(self.target,self.data,self.folder)
+        self.assertTrue(self.source.exists())
+        self.assertFalse(self.arr.commands)
+
+    def test_cleanup_handoff_requires_final_library_and_preserves_unknown_files(self):
+        self.worker.handoff(self.target,self.data,self.folder)
+        published = Path(self.data["handoff"])
+        unknown = published/"personal.txt"
+        unknown.write_text("keep")
+        library = self.root/"library"/"Song.flac"
+        library.parent.mkdir()
+        library.write_bytes(b"test")
+        original = self.arr.call
+        def call(path,*args,**kwargs):
+            if path.endswith("track"):
+                return [{"id":3,"trackFileId":4}]
+            if path.endswith("trackfile/4"):
+                return {"path":str(library)}
+            return original(path,*args,**kwargs)
+        self.arr.call = call
+        self.worker.cleanup_handoff(self.target,self.data)
+        self.assertTrue(library.exists())
+        self.assertTrue(unknown.exists())
+        self.assertFalse((published/"Song.flac").exists())
+
+    def test_interrupted_publication_reconciles_without_overwriting_other_downloads(self):
+        with patch.object(soulseek.os,"rename",side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.worker.handoff(self.target,self.data,self.folder)
+        row = self.worker.db.execute("SELECT state,data FROM jobs WHERE id=1").fetchone()
+        self.assertEqual(row["state"],"publishing")
+        self.assertTrue(self.source.exists())
+        self.worker.handoff(self.target,json.loads(row["data"]),self.folder)
+        self.assertFalse(self.source.exists())
+        self.assertEqual(len(self.arr.commands),1)
+
+    def test_handoff_job_blocks_next_album_and_removal_does_not_republish(self):
+        self.worker.handoff(self.target,self.data,self.folder)
+        original = self.arr.call
+        def call(path,data=None,**query):
+            if path.endswith("wanted/missing"):
+                return {"records":[dict(id=i,title="Album",monitored=True,artistId=2,releaseDate="2020-01-01") for i in (1,2)],"totalRecords":2}
+            if path.endswith("artist/2"):
+                return {"id":2,"artistName":"Artist","monitored":True}
+            if "/album/" in path:
+                return {"releases":[{"id":9,"monitored":True}]}
+            if path.endswith("track"):
+                return [{"id":3,"title":"Song"}]
+            return original(path,data,**query)
+        self.arr.call = call
+        with self.worker.db:
+            self.worker.db.execute("UPDATE jobs SET next_run=0")
+        self.worker.tick()
+        self.assertFalse(self.slsk.searches)
+        published = Path(self.data["handoff"])
+        for file in published.iterdir():
+            file.unlink()
+        published.rmdir()
+        with self.worker.db:
+            self.worker.db.execute("UPDATE jobs SET next_run=0")
+        self.worker.tick()
+        self.assertEqual(self.worker.db.execute("SELECT state FROM jobs WHERE id=1").fetchone()[0],"discarded")
+        self.assertFalse(published.exists())
+
+
 class ClientTests(unittest.TestCase):
     def test_nicotine_adapter_routes_to_own_api_version(self):
         client = soulseek.SoulseekApi("http://example.invalid:12339", "test-key", "nicotine")
