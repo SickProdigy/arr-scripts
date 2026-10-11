@@ -190,8 +190,7 @@ See [integrated ratings](ratings.md) to rate new imports after Beets and synchro
 later Subsonic/Navidrome rating changes to MusicBrainz. Setup installs pinned SonicRatings engine
 and musicbrainz-helper packages; arr-scripts owns their automation hooks. Supply a Last.fm key for SonicRatings
 scoring, or leave it empty to use MusicBrainz community ratings locally.
-# Optional Beets lyrics
+## Optional Beets lyrics
 
 Lyrics run after metadata tagging with a bounded timeout. Existing lyrics are
 preserved; new lyrics are embedded into audio files. See [configuration and behavior](beets-lyrics.md).
-
