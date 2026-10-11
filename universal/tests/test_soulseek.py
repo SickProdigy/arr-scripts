@@ -51,6 +51,9 @@ class MatchingTests(unittest.TestCase):
             payload = soulseek.import_payload("radarr", target, [decision], temporary)
             self.assertEqual(payload["importMode"], "copy")
             self.assertEqual(payload["files"][0]["movieId"], 1)
+            self.assertEqual(payload["files"][0]["releaseGroup"], "Soulseek")
+            decision["releaseGroup"] = "OriginalGroup"
+            self.assertEqual(soulseek.import_payload("radarr", target, [decision], temporary)["files"][0]["releaseGroup"], "OriginalGroup")
             decision["rejections"] = [{"reason": "wrong quality"}]
             self.assertIsNone(soulseek.import_payload("radarr", target, [decision], temporary))
             decision.update(rejections=[], movie={"id": 2})
@@ -384,6 +387,72 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len(self.slsk.searches), 2)
         self.assertEqual(self.worker.db.execute("SELECT count(*) FROM jobs WHERE state='searching'").fetchone()[0], 1)
+
+    def reviewed_batch(self):
+        batch = self.reach_batch()
+        self.slsk.batches[batch]["transfers"][0]["state"] = "Completed, Succeeded"
+        folder = self.root/"arr-scripts/radarr"/batch
+        folder.mkdir(parents=True)
+        source = folder/"Movie.2020.1080p.mkv"
+        source.write_bytes(b"test")
+        data = json.loads(self.row()["data"])
+        data["reason"] = "import rejected or identity mismatch"
+        self.worker.save(1, "review", data)
+        return folder,source,data
+
+    def test_discard_removes_only_owned_files_and_does_not_redownload(self):
+        folder,source,data = self.reviewed_batch()
+        extra = folder/"personal.txt"
+        extra.write_text("keep")
+        self.worker.discard(1)
+        self.assertFalse(source.exists())
+        self.assertTrue(extra.exists())
+        self.assertEqual(self.row()["state"], "discarded")
+        self.tick(86401)
+        self.assertEqual(len(self.slsk.searches), 1)
+
+    def test_discard_retains_active_transfers(self):
+        folder,source,data = self.reviewed_batch()
+        self.slsk.batches[data["batch"]]["transfers"][0]["state"] = "Queued"
+        with self.assertRaises(ValueError):
+            self.worker.discard(1)
+        self.assertTrue(source.exists())
+        self.assertEqual(self.row()["state"], "review")
+
+    def test_discard_retains_uncertain_or_running_import(self):
+        folder,source,data = self.reviewed_batch()
+        data["importTarget"] = {"id":1}
+        self.worker.save(1,"review",data)
+        with self.assertRaises(ValueError):
+            self.worker.discard(1)
+        data["command"] = 123
+        self.worker.save(1,"review",data)
+        original = self.arr.call
+        self.arr.call = lambda path,*args,**kwargs: {"status":"started"} if path.endswith("command/123") else original(path,*args,**kwargs)
+        with self.assertRaises(ValueError):
+            self.worker.discard(1)
+        self.assertTrue(source.exists())
+
+    def test_discard_retains_changed_or_hardlinked_sources(self):
+        import os
+        folder,source,data = self.reviewed_batch()
+        source.write_bytes(b"changed")
+        with self.assertRaises(ValueError):
+            self.worker.discard(1)
+        source.write_bytes(b"test")
+        linked = self.root/"library.mkv"
+        os.link(source,linked)
+        with self.assertRaises(ValueError):
+            self.worker.discard(1)
+        self.assertTrue(source.exists())
+        self.assertTrue(linked.exists())
+
+    def test_discard_accepts_finished_partial_file_and_removes_empty_batch(self):
+        folder,source,data = self.reviewed_batch()
+        source.write_bytes(b"te")
+        self.slsk.batches[data["batch"]]["transfers"][0]["state"] = "Completed, Errored"
+        self.worker.discard(1)
+        self.assertFalse(folder.exists())
 
     def test_large_library_starts_searches_before_second_page_and_persists_cursor(self):
         calls = []

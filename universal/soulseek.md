@@ -117,7 +117,10 @@ season packs are skipped. Conservative matching can miss valid releases.
 Completed downloads are isolated under `arr-scripts/<app>/<batch UUID>` inside
 the shared download directory. The worker checks successful transfer states and
 file sizes, requests the application's manual-import decisions, and submits
-only matching identities without import rejections. It never forces a rejected
+only matching identities without import rejections. A release group recognized
+by the application is preserved; otherwise the import uses `Soulseek` as the
+release group. Include the release-group field in the application's renaming
+format to show it in library filenames. It never forces a rejected
 import or automatically replaces existing files. Import uses copy mode. Once the
 import command succeeds, the item leaves the wanted list, and the library files
 are accessible, the worker deletes only its recorded batch source files. Personal
@@ -140,6 +143,19 @@ many files. Tidal and Deezer continue independently. Previously active jobs are
 retained; no new searches start until they drop below the new limit. Search misses wait one day; API failures defer for five minutes.
 Searches and download batches have durable IDs; uncertain download requests are
 reconciled rather than blindly submitted again.
+
+To discard a reviewed job and its finished batch files:
+
+```bash
+ARR_SOULSEEK_APP=lidarr bash /config/extended/Soulseek.bash --discard 123
+```
+
+Replace the application and job ID as needed. Discard verifies batch ownership,
+finished transfers, and any acknowledged import command before deleting only
+recorded files from that UUID batch. Personal files, changed or shared files,
+active transfers, and uncertain imports are retained. The job becomes
+`discarded`, preventing automatic re-download; `--retry 123` starts it afresh.
+Discard itself never starts another search. Batch history remains in the client.
 
 Failed transfers, partial batches, ambiguous imports and uncertain import replies
 enter `review` state and are logged by item ID. Files are retained. After fixing

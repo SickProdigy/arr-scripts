@@ -167,6 +167,7 @@ def import_payload(app, target, decisions, folder):
         if not path.is_relative_to(root) or not path.is_file():
             continue
         result = {key: item[key] for key in ("path", "quality", "languages", "releaseGroup", "indexerFlags", "folderName", "releaseType") if key in item}
+        result["releaseGroup"] = item.get("releaseGroup") or "Soulseek"
         if app == "radarr":
             if (item.get("movie") or {}).get("id") != target["id"]:
                 continue
@@ -360,6 +361,54 @@ class Worker:
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
 
+    def discard(self, ident):
+        """Remove only recorded, finished batch files; keep a retryable tombstone."""
+        row = self.db.execute("SELECT * FROM jobs WHERE id=? AND state='review'", (ident,)).fetchone()
+        if not row:
+            raise ValueError("Job is not awaiting review")
+        data = json.loads(row["data"])
+        if "importTarget" in data and "command" not in data:
+            raise ValueError("Import outcome is uncertain; retained")
+        if "command" in data:
+            command = self.arr.call(self.prefix+f"command/{data['command']}")
+            if command.get("status") not in ("completed", "failed", "aborted"):
+                raise ValueError("Import is still active; retained")
+        sources = []
+        folder = None
+        if "batch" in data:
+            batch = str(uuid.UUID(data["batch"]))
+            if batch != data["batch"]:
+                raise ValueError("Invalid batch directory")
+            remote = self.slsk.call(f"api/v0/transfers/downloads/batches/{batch}")
+            expected = {(f["filename"], f["size"]) for f in data["files"]}
+            transfers = remote.get("transfers") or []
+            if {(f["filename"], f["size"]) for f in transfers} != expected or not transfers:
+                raise ValueError("Batch ownership cannot be verified; retained")
+            if any(not f.get("state", "").startswith("Completed") for f in transfers):
+                raise ValueError("Transfers are still active; retained")
+            folder = self.downloads/"arr-scripts"/self.app/batch
+            for directory in (self.downloads, self.downloads/"arr-scripts", folder.parent, folder):
+                if directory.is_symlink():
+                    raise ValueError("Symlinked download directory")
+            if not folder.resolve().is_relative_to(self.downloads.resolve()):
+                raise ValueError("Batch is outside download root")
+            for file in data["files"]:
+                if not safe_remote(file["filename"]):
+                    raise ValueError("Invalid source filename")
+                path = folder/PureWindowsPath(file["filename"]).name
+                if path.is_symlink():
+                    raise ValueError("Symlinked source file")
+                if path.exists():
+                    info = path.stat()
+                    if not path.is_file() or info.st_size > file["size"] or info.st_nlink != 1:
+                        raise ValueError("Source file changed or shared; retained")
+                    sources.append(path)
+        for path in sources:
+            path.unlink()
+        if folder and folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+        self.save(ident, "discarded", {"reason": data.get("reason", "manually discarded")})
+
     def tick(self):
         version = self.slsk.call("api/v0/application/version")
         if isinstance(version, dict):
@@ -381,7 +430,7 @@ class Worker:
         queue = self.queued()  # Failure must abort: do not assume an empty queue.
         now = self.clock()
         # Reconcile owned transfers first, even when they are outside this page.
-        rows = self.db.execute("SELECT * FROM jobs WHERE next_run<=? AND state NOT IN ('done','review') "
+        rows = self.db.execute("SELECT * FROM jobs WHERE next_run<=? AND state NOT IN ('done','review','discarded') "
                                "ORDER BY CASE WHEN state='waiting' THEN 1 ELSE 0 END,next_run,first_seen,id LIMIT 20",
                                (now,)).fetchall()
         records, next_page, total, page = self.discover()
@@ -435,7 +484,7 @@ class Worker:
         # Only absence from a refreshed record proves completion; absence from a
         # discovery page must never finish jobs elsewhere in the library.
         ids = {row["id"] for row in rows} | set(targets)
-        rows = self.db.execute("SELECT * FROM jobs WHERE next_run<=? AND state NOT IN ('done','review') "
+        rows = self.db.execute("SELECT * FROM jobs WHERE next_run<=? AND state NOT IN ('done','review','discarded') "
                                "AND id IN (" + ",".join("?" for _ in ids) + ") "
                                "ORDER BY CASE WHEN state='waiting' THEN 1 ELSE 0 END,first_seen,id",
                                (now, *sorted(ids))).fetchall() if ids else []
@@ -564,7 +613,9 @@ def worker_lock(config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--retry", type=int, help="Retry a reviewed job after fixing its cause")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--retry", type=int, help="Retry a reviewed or discarded job after fixing its cause")
+    actions.add_argument("--discard", type=int, help="Discard a reviewed job and its finished batch files")
     parser.add_argument("--owns", type=int, help="Local-only check: exit 0 if Soulseek owns this active job")
     parser.add_argument("--diagnose", action="store_true", help="Read-only API and wanted-item diagnostics, independent of the worker lock")
     args = parser.parse_args()
@@ -620,8 +671,11 @@ def main():
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
                         os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true")
         try:
+            if args.discard is not None:
+                worker.discard(args.discard)
+                return  # Discard must never start unrelated searches.
             if args.retry is not None:
-                row = worker.db.execute("SELECT * FROM jobs WHERE id=? AND state='review'", (args.retry,)).fetchone()
+                row = worker.db.execute("SELECT * FROM jobs WHERE id=? AND state IN ('review','discarded')", (args.retry,)).fetchone()
                 if not row:
                     raise ValueError("Job is not awaiting review")
                 data = json.loads(row["data"])
