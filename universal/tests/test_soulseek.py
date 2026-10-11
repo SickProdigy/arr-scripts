@@ -249,7 +249,7 @@ class WorkerTests(unittest.TestCase):
         ident = self.reach_batch()
         self.slsk.batches[ident]["transfers"][0]["state"] = "Completed, Succeeded"
         self.tick()
-        folder = self.root/"arr-scripts/radarr"/ident
+        folder = self.root/ident
         folder.mkdir(parents=True)
         file = folder/"Movie.2020.1080p.mkv"
         file.write_bytes(b"test")
@@ -264,7 +264,7 @@ class WorkerTests(unittest.TestCase):
         self.arr.movies[0]["movieFile"] = {"path": str(library)}
         # The library must be outside the completed-download root.
         self.worker.downloads = self.root/"downloads"
-        new_folder = self.worker.downloads/"arr-scripts/radarr"/ident
+        new_folder = self.worker.downloads/ident
         new_folder.parent.mkdir(parents=True)
         folder.rename(new_folder)
         self.tick()
@@ -274,7 +274,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_cleanup_retains_files_until_library_is_accessible(self):
         ident = self.reach_batch()
-        folder = self.root/"arr-scripts/radarr"/ident
+        folder = self.root/ident
         folder.mkdir(parents=True)
         source = folder/"Movie.2020.1080p.mkv"
         source.write_bytes(b"test")
@@ -391,7 +391,7 @@ class WorkerTests(unittest.TestCase):
     def reviewed_batch(self):
         batch = self.reach_batch()
         self.slsk.batches[batch]["transfers"][0]["state"] = "Completed, Succeeded"
-        folder = self.root/"arr-scripts/radarr"/batch
+        folder = self.root/batch
         folder.mkdir(parents=True)
         source = folder/"Movie.2020.1080p.mkv"
         source.write_bytes(b"test")
@@ -453,6 +453,20 @@ class WorkerTests(unittest.TestCase):
         self.slsk.batches[data["batch"]]["transfers"][0]["state"] = "Completed, Errored"
         self.worker.discard(1)
         self.assertFalse(folder.exists())
+
+    def test_new_batch_destination_is_directly_under_configured_root(self):
+        batch = self.reach_batch()
+        post = next(data for path,data in self.slsk.posts if path.endswith("batches"))
+        self.assertEqual(post["options"]["destination"],batch)
+        data = json.loads(self.row()["data"])
+        self.assertEqual(self.worker.batch_folder(data),self.root/batch)
+
+    def test_old_transfer_intent_keeps_its_existing_destination(self):
+        import uuid
+        batch = str(uuid.uuid4())
+        self.assertEqual(self.worker.batch_folder({"batch":batch}),self.root/"arr-scripts"/"radarr"/batch)
+        with self.assertRaises(ValueError):
+            self.worker.batch_folder({"batch":batch,"destination":"../"+batch})
 
     def test_large_library_starts_searches_before_second_page_and_persists_cursor(self):
         calls = []
@@ -540,12 +554,12 @@ class HandoffTests(unittest.TestCase):
         self.slsk = Soulseek()
         self.worker = soulseek.Worker("lidarr",self.arr,self.slsk,self.root,self.root/"downloads",delay=0,imports=self.root/"import")
         self.batch = str(uuid.uuid4())
-        self.folder = self.worker.downloads/"arr-scripts/lidarr"/self.batch
+        self.folder = self.worker.downloads/self.batch
         self.folder.mkdir(parents=True)
         self.source = self.folder/"Song.flac"
         self.source.write_bytes(b"test")
         self.target = dict(id=1,app="lidarr",title="Album",artist="Artist",artistId=2,tracks=[{"id":3,"title":"Song"}],missingTrackIds=[3],releaseDate="2020-01-01")
-        self.data = dict(batch=self.batch, files=[{"filename":"Artist\\Album\\Song.flac","size":4}])
+        self.data = dict(batch=self.batch, destination=self.batch, files=[{"filename":"Artist\\Album\\Song.flac","size":4}])
         with self.worker.db:
             self.worker.db.execute("INSERT INTO jobs(id,target,first_seen) VALUES(1,?,0)",(json.dumps(self.target),))
         original = self.arr.call

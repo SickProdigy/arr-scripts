@@ -91,3 +91,9 @@ Older direct-import failures remain in `review`. To hand one to the new queue,
 run `ARR_SOULSEEK_APP=lidarr bash /config/extended/Soulseek.bash --retry ITEM_ID`.
 The existing `--discard ITEM_ID` command still handles those older reviewed
 batches. New handed-off albums are removed through Lidarr's Activity queue.
+
+New Nicotine batches go directly under the plugin's completed-download root:
+`/data/arr-scripts/<batch UUID>`, seen by Lidarr as
+`/downloads/soulseek/<batch UUID>`. There are no additional `arr-scripts` or
+`lidarr` subfolders. Previously queued jobs retain their original location until
+finished or discarded; deleting a directory does not cancel an active transfer.

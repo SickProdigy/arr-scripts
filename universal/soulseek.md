@@ -122,8 +122,11 @@ and removal with delete-files selected releases the slot without re-downloading
 that job. See the [Lidarr guide](../lidarr/soulseek.md). The remaining direct-import
 behavior below applies to Sonarr/Radarr and older reviewed Lidarr jobs.
 
-Completed downloads are isolated under `arr-scripts/<app>/<batch UUID>` inside
-the shared download directory. The worker checks successful transfer states and
+Completed downloads are isolated under `<batch UUID>` inside
+the shared download directory, with no extra app-name or `arr-scripts` folders.
+A dedicated per-application root can be used if needed; UUIDs keep shared-root
+batches distinct. Existing jobs retain their original destination until finished
+or discarded. The worker checks successful transfer states and
 file sizes, requests the application's manual-import decisions, and submits
 only matching identities without import rejections. A release group recognized
 by the application is preserved; otherwise the import uses `Soulseek` as the

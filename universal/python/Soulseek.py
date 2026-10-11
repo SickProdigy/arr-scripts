@@ -305,6 +305,25 @@ class Worker:
         delay = 0 if self.app == "lidarr" and self.sources == "soulseek" else self.delay
         return self.clock()-row["first_seen"] >= delay
 
+    def batch_folder(self, data):
+        batch = str(uuid.UUID(data["batch"]))
+        if batch != data["batch"]:
+            raise ValueError("Invalid batch directory")
+        # New jobs use a flat destination. Keep existing transfer intents valid
+        # until their already queued downloads can finish or be discarded.
+        destination = data.get("destination", f"arr-scripts/{self.app}/{batch}")
+        if destination not in (batch, f"arr-scripts/{self.app}/{batch}"):
+            raise ValueError("Unexpected batch destination")
+        folder = self.downloads.joinpath(*destination.split("/"))
+        current = folder
+        while current != self.downloads:
+            if current.is_symlink():
+                raise ValueError("Symlinked download directory")
+            current = current.parent
+        if self.downloads.is_symlink() or not folder.resolve().is_relative_to(self.downloads.resolve()):
+            raise ValueError("Batch is outside download root")
+        return folder
+
     def cleanup_import(self, target, data):
         """Verify the accepted command and library before deleting owned sources."""
         if "handoff" not in data:
@@ -335,10 +354,7 @@ class Worker:
         batch = str(uuid.UUID(data["batch"]))
         if batch != data["batch"]:
             raise ValueError("Invalid batch directory")
-        folder = self.downloads / "arr-scripts" / self.app / batch
-        for directory in (self.downloads, self.downloads/"arr-scripts", folder.parent, folder):
-            if directory.is_symlink():
-                raise ValueError("Symlinked download directory")
+        folder = self.batch_folder(data)
         for file in library:
             path = Path(file["path"])
             if not path.is_absolute() or path.resolve().is_relative_to(self.downloads.resolve()):
@@ -506,10 +522,7 @@ class Worker:
                 raise ValueError("Batch ownership cannot be verified; retained")
             if any(not f.get("state", "").startswith("Completed") for f in transfers):
                 raise ValueError("Transfers are still active; retained")
-            folder = self.downloads/"arr-scripts"/self.app/batch
-            for directory in (self.downloads, self.downloads/"arr-scripts", folder.parent, folder):
-                if directory.is_symlink():
-                    raise ValueError("Symlinked download directory")
+            folder = self.batch_folder(data)
             if not folder.resolve().is_relative_to(self.downloads.resolve()):
                 raise ValueError("Batch is outside download root")
             for file in data["files"]:
@@ -664,6 +677,7 @@ class Worker:
                         self.save(ident, "review", {"reason": "duplicate basenames"})
                         continue
                     data.update(batch=str(uuid.uuid4()), username=peer["username"], files=[{"filename": f["filename"], "size": f["size"]} for f in files])
+                    data["destination"] = data["batch"]
                     self.save(ident, "enqueueing", data)
                 elif state == "enqueueing":
                     try:
@@ -672,7 +686,7 @@ class Worker:
                         if error.status != 404:
                             raise
                         try:
-                            self.slsk.call("api/v0/transfers/downloads/batches", {"id": data["batch"], "searchId": data["search"], "username": data["username"], "files": data["files"], "options": {"destination": f"arr-scripts/{self.app}/{data['batch']}"}})
+                            self.slsk.call("api/v0/transfers/downloads/batches", {"id": data["batch"], "searchId": data["search"], "username": data["username"], "files": data["files"], "options": {"destination": data.get("destination", f"arr-scripts/{self.app}/{data['batch']}")}})
                         except ApiError as error:
                             if error.status != 409:
                                 raise
@@ -688,7 +702,7 @@ class Worker:
                     elif any("Completed" in f["state"] and "Succeeded" not in f["state"] for f in transfers):
                         self.save(ident, "review", {**data, "reason": "failed transfer"})
                 elif state in ("downloaded","publishing"):
-                    folder = self.downloads / "arr-scripts" / self.app / data["batch"]
+                    folder = self.batch_folder(data)
                     if not folder.is_dir():
                         raise ValueError("Download mount unavailable")
                     for file in data["files"]:
