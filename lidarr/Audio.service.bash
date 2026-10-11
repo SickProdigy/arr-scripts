@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.52"
+scriptVersion="2.53"
 scriptName="Audio"
 
 ### Import Settings
@@ -131,11 +131,11 @@ verifyConfig () {
   fi
 
   if [ -z "$downloadPath" ]; then
-    downloadPath="/config/extended/downloads"
+    downloadPath="/downloads/lidarr/downloads"
   fi
 
   if [ -z "$importPath" ]; then
-    importPath="/config/extended/import"
+    importPath="/downloads/lidarr/import"
   fi
 
   if [ -z "$failedDownloadAttemptThreshold" ]; then

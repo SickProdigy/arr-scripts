@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="4.0"
+scriptVersion="4.1"
 scriptName="Video"
 
 ### Import Settings
@@ -31,7 +31,7 @@ verifyConfig () {
 	fi
 
 	if [ -z "$downloadPath" ]; then
-		downloadPath="/config/extended/downloads"
+		downloadPath="/downloads/lidarr/downloads"
 	fi
 
 	if [ -z "$videoScriptInterval" ]; then

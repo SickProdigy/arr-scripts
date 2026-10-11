@@ -1,5 +1,5 @@
 {
-  "download_base_path": "/config/extended/downloads/audio/incomplete",
+  "download_base_path": "/downloads/lidarr/downloads/audio/incomplete",
   "quality_audio": "LOSSLESS",
   "quality_video": "1080",
   "format_album": "{album_artist}/{album_title} ({album_year})/{track_volume_num_optional}{album_track_num} - {track_title}",

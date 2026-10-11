@@ -11,17 +11,33 @@ Container: <https://docs.linuxserver.io/images/docker-lidarr>
    Docker Run Example:<br>
    `-v /path/to/preferred/local/folder-01:/custom-services.d`<br>
    `-v /path/to/preferred/local/folder-02:/custom-cont-init.d`
-2. Download [scripts_init.bash](https://gitea.rcs1.top/sickprodigy/arr-scripts/src/branch/main/lidarr/scripts_init.bash) ([raw file](https://gitea.rcs1.top/sickprodigy/arr-scripts/raw/branch/main/lidarr/scripts_init.bash)) and place it into the following folder:
+2. Download [scripts_init.bash](https://github.com/SickProdigy/arr-scripts/blob/main/lidarr/scripts_init.bash) ([raw file](https://raw.githubusercontent.com/SickProdigy/arr-scripts/main/lidarr/scripts_init.bash)) and place it into the following folder:
    `/custom-cont-init.d`
 3. Start your container and wait for the application to load
 4. Optional: Customize the configuration by modifying the following file `/config/extended.conf`
 5. Restart the container
   
+## Standard download paths
+
+Mount your download directory at `/downloads` inside Lidarr, with read/write
+access for the container user. New configurations and blank-setting fallbacks use:
+
+```bash
+downloadPath="/downloads/lidarr/downloads"
+importPath="/downloads/lidarr/import"
+```
+
+These are the Deezer/TIDAL working and blackhole import folders. Existing
+explicit paths remain valid; updating does not relocate files or overwrite your
+configuration. If you change `importPath`, keep Lidarr's blackhole download
+client folder aligned with it. Soulseek uses `/downloads/soulseek` as described
+in the [Soulseek guide](soulseek.md).
+
 ## Updating
 
 Updating is a bit more cumbersome. To update, do the following:
 
-1. Download/update your local `/config/extended.conf` file with the latest options from: [extended.conf](https://gitea.rcs1.top/sickprodigy/arr-scripts/src/branch/main/lidarr/extended.conf)
+1. Review the latest [extended.conf](extended.conf) options and merge the ones you need into your local `/config/extended.conf`, preserving credentials and custom settings.
 2. Restart the container, wait for it to fully load the application.
 3. Restart the container again, for the new scripts to activate.
 
@@ -36,7 +52,7 @@ This configuration does its best to update everything automatically, but with ho
 1. Remove any Arr app customizations manually.
 
 ## Support
-[Issues](https://gitea.rcs1.top/sickprodigy/arr-scripts/issues)
+[Issues](https://github.com/SickProdigy/arr-scripts/issues)
 
 ## Troubleshooting
 
@@ -197,4 +213,4 @@ preserved; new lyrics are embedded into audio files. See [configuration and beha
 
 ## Optional Soulseek downloads
 
-See [Soulseek setup and provider selection](../universal/soulseek.md) for the shared slskd downloader, fallback behavior and import requirements.
+See [Soulseek setup](soulseek.md) for slskd or Nicotine+, shared mounts, provider selection, and import cleanup.

@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.2"
+scriptVersion="2.3"
 scriptName="TidalVideoDownloader"
 
 #### Import Settings
@@ -21,7 +21,7 @@ verifyConfig () {
 	fi
 	
 	if [ -z "$downloadPath" ]; then
-		downloadPath="/config/extended/downloads"
+		downloadPath="/downloads/lidarr/downloads"
 	fi
 	videoDownloadPath="$downloadPath/tidal/videos"
 	tidalSgConfigDir="/config/extended/tidal_dl_sg"

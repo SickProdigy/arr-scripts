@@ -11,10 +11,34 @@ Run slskd alongside your Arr containers. arr-scripts installs the worker into
 each Arr container; it does not install or start slskd itself. SoulseekQt and
 ordinary Nicotine+ installations do not expose this API. For Nicotine+, install the API plugin from the separate repository. The initial
 supported target is Nicotine+ 3.3.11 with Python 3.9+. Set `soulseekClient="nicotine"`
-and `soulseekUrl="http://nicotine:12339"`, with the plugin's key in `soulseekApiKey`.
+and `soulseekUrl="http://nicotineplus:12339"`, with the plugin's key in `soulseekApiKey`.
 Its API version is independent of slskd; the worker requires plugin version 0.1.0
 and the advertised search and batch capabilities. Keep Nicotine+ running and
 connected. You can continue using its GUI.
+
+Start with the application guide for your configuration:
+[Lidarr](../lidarr/soulseek.md), [Sonarr](../sonarr/soulseek.md), or
+[Radarr](../radarr/soulseek.md). The sections below cover the shared behavior.
+
+## Nicotine+ plugin settings
+
+Install the `api` directory from the plugin repository, then enable
+**Soulseek HTTP API** in Nicotine's plugin preferences. Set an API key of at
+least 32 random characters. For separate containers, use listen address
+`0.0.0.0` and port `12339`; the default `127.0.0.1` cannot accept connections
+from Arr's container. Use a private Docker network shared with Arr.
+
+The **Completed download root** is an absolute path inside Nicotine. Use a
+dedicated mount such as `/data/arr-scripts` for automated downloads, with the
+same host directory mounted at `/downloads/soulseek` inside Arr. This preserves
+your normal personal completed/incomplete download locations. A blank root
+uses Nicotine's normal completed-download directory instead.
+
+Save settings and disable/re-enable the plugin to start the listener with the
+new values. An empty API key prevents startup. Use the same key in Arr and its
+reachable Docker service name or alias in `soulseekUrl`. A shared Docker network
+does not require publishing the API port to the host. Recreate containers after
+adding mounts or changing networks.
 
 ## Configuration
 

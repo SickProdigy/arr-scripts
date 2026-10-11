@@ -76,8 +76,8 @@ For more details, visit the [Wiki](https://github.com/SickProdigy/arr-scripts/wi
 * [Radarr](https://radarr.video/)
 * [The Movie Database](https://www.themoviedb.org/)
 * [Recyclarr](https://github.com/recyclarr/recyclarr)
-* Icons made by [Freepik](https://www.freepik.com/) from [Flaticon](ttps://www.flaticon.com)
+* Icons made by [Freepik](https://www.freepik.com/) from [Flaticon](https://www.flaticon.com)
 
 ## Optional Soulseek downloads
 
-See [Soulseek setup and provider selection](../universal/soulseek.md) for the shared slskd downloader, fallback behavior and import requirements.
+See [Soulseek setup](soulseek.md) for slskd or Nicotine+, shared mounts, missing-movie fallback, and import cleanup.
