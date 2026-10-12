@@ -27,15 +27,25 @@ logfileSetup () {
 getArrAppInfo () {
   # Get Arr App information
   if [ -z "$arrUrl" ] || [ -z "$arrApiKey" ]; then
-    arrUrlBase="$(cat /config/config.xml | xq | jq -r .Config.UrlBase)"
-    if [ "$arrUrlBase" == "null" ]; then
+    local arrConfigValues=()
+    mapfile -t arrConfigValues < <(python3 - /config/config.xml <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+for name in ("UrlBase", "InstanceName", "ApiKey", "Port"):
+    print(root.findtext(name, default=""))
+PY
+)
+    arrUrlBase="${arrConfigValues[0]:-}"
+    if [ -z "$arrUrlBase" ] || [ "$arrUrlBase" == "/" ]; then
       arrUrlBase=""
     else
-      arrUrlBase="/$(echo "$arrUrlBase" | sed "s/\///")"
+      arrUrlBase="/${arrUrlBase#/}"
     fi
-    arrName="$(cat /config/config.xml | xq | jq -r .Config.InstanceName)"
-    arrApiKey="$(cat /config/config.xml | xq | jq -r .Config.ApiKey)"
-    arrPort="$(cat /config/config.xml | xq | jq -r .Config.Port)"
+    arrName="${arrConfigValues[1]:-}"
+    arrApiKey="${arrConfigValues[2]:-}"
+    arrPort="${arrConfigValues[3]:-}"
     arrUrl="http://127.0.0.1:${arrPort}${arrUrlBase}"
   fi
 }
