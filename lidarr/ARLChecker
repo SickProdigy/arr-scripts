@@ -8,8 +8,9 @@ source /config/extended.conf
 #### Import Functions
 source /config/extended/functions
 
-if [ "$dlClientSource" == "tidal" ]; then
-    log "Script is not enabled, enable by setting dlClientSource to \"deezer\" or \"both\" by modifying the \"/config/extended.conf\" config file..."
+normalizedSources=",${dlClientSource//[[:space:]]/},"
+if [[ "$normalizedSources" != *,deezer,* && "$normalizedSources" != *,both,* && "$normalizedSources" != *,all,* ]]; then
+    log "Script is not enabled; include \"deezer\" or select \"all\" in dlClientSource in /config/extended.conf..."
     log "Sleeping (infinity)"
     sleep infinity
 fi

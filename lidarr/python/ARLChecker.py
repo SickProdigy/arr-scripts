@@ -153,8 +153,14 @@ class LidarrExtendedAPI:
             exit(1)
         # Ensure Deezer is enabled and ARL token is populated
         for line in self.fileText:
-            if 'dlClientSource="deezer"' in line or 'dlClientSource="both"' in line:
-                deezer_active = True
+            source_match = re.match(r'^\s*dlClientSource\s*=\s*"([^"]*)"', line)
+            if source_match:
+                sources = {
+                    source.strip().lower()
+                    for source in source_match.group(1).split(',')
+                    if source.strip()
+                }
+                deezer_active = bool(sources.intersection({'deezer', 'both', 'all'}))
             if 'arlToken=' in line:
                 self.arlLineText = line
                 self.arlLineIndex = self.fileText.index(self.arlLineText)
