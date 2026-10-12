@@ -211,7 +211,11 @@ def import_payload(app, target, decisions, folder):
 
 
 class Worker:
-    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=7, notfound_days=90):
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=30, notfound_days=90, offline_delay=900, offline_grace=86400, max_batches=3, search_retry_days=7):
+        self.failure_search_seconds = max(0,int(search_retry_days))*86400
+        self.offline_delay = max(0,int(offline_delay))
+        self.offline_grace = max(self.offline_delay,int(offline_grace))
+        self.max_batches = max(1,min(10,int(max_batches)))
         self.retry_seconds = max(0, int(retry_days))*86400
         self.notfound_seconds = max(0, int(notfound_days))*86400
         self.audio_policy = (audio_policy or AudioPolicy()) if app == "lidarr" else None
@@ -228,6 +232,7 @@ class Worker:
         self.db.execute("CREATE TABLE IF NOT EXISTS scan (id INTEGER PRIMARY KEY CHECK(id=1), page INTEGER NOT NULL)")
         self.db.execute("INSERT OR IGNORE INTO scan(id,page) VALUES(1,1)")
         self.db.execute("CREATE TABLE IF NOT EXISTS failed_candidates (id INTEGER NOT NULL, fingerprint TEXT NOT NULL, expires REAL NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(id,fingerprint))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS background_batches (batch TEXT PRIMARY KEY, id INTEGER NOT NULL, target TEXT NOT NULL, data TEXT NOT NULL)")
         self.db.commit()
 
     @staticmethod
@@ -238,7 +243,9 @@ class Worker:
     def excluded(self, ident, candidate):
         key = self.candidate_key(candidate["username"], candidate["files"])
         row = self.db.execute("SELECT expires FROM failed_candidates WHERE id=? AND fingerprint=?", (ident,key)).fetchone()
-        return bool(row and row[0] > self.clock())
+        if row and row[0] > self.clock():
+            return True
+        return any(self.candidate_key(json.loads(r[0])["username"],json.loads(r[0])["files"]) == key for r in self.db.execute("SELECT data FROM background_batches WHERE id=?",(ident,)))
 
     def fail_candidate(self, ident, data, reason):
         data["attempted"] = True
@@ -251,6 +258,9 @@ class Worker:
         data = dict(data)
         data["attempted"] = data.get("attempted", False) or "reason" in data
         candidates = list(data.get("candidates", []))
+        if not self.batch_room(ident):
+            self.save(ident,"candidate_wait",data,60)
+            return
         while candidates:
             candidate = candidates.pop(0)
             names = [PureWindowsPath(f["filename"]).name.casefold() for f in candidate["files"]]
@@ -261,15 +271,104 @@ class Worker:
             next_data["destination"] = next_data["batch"]
             self.save(ident, "enqueueing", next_data)
             return
-        self.save(ident, "waiting", {}, self.retry_seconds if data.get("attempted") else self.notfound_seconds)
+        if self.db.execute("SELECT 1 FROM background_batches WHERE id=?",(ident,)).fetchone():
+            self.save(ident,"background_wait",data,60)
+        else:
+            self.save(ident, "waiting", {}, self.failure_search_seconds if data.get("attempted") else self.notfound_seconds)
+
+    def batch_room(self, ident):
+        foreground = self.db.execute("SELECT count(*) FROM jobs WHERE id!=? AND state IN ('searching','enqueueing','downloading','downloaded','publishing','handoff','importing','failure_cleanup')",(ident,)).fetchone()[0]
+        background = self.db.execute("SELECT count(*) FROM background_batches").fetchone()[0]
+        retained = sum(bool(json.loads(row[0]).get("batch")) for row in self.db.execute("SELECT data FROM jobs WHERE id!=? AND state IN ('cleanup','review')",(ident,)))
+        return foreground == 0 and background+retained < self.max_batches
+
+    def cancel_client_batch(self,data):
+        if getattr(self.slsk,"client","slskd") != "nicotine":
+            raise ValueError("Client cancellation unavailable")
+        self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}/cancel",{"cleanupIncomplete":True})
+
+    def check_batch(self,data,batch):
+        transfers = batch.get("transfers") or []
+        expected = {(f["filename"],f["size"]) for f in data["files"]}
+        if not transfers or {(f["filename"],f["size"]) for f in transfers} != expected:
+            raise ValueError("Batch identities changed")
+        return transfers
+
+    def observe_offline(self,data,batch):
+        if batch.get("peerOffline") is True:
+            data.setdefault("offlineSince",self.clock())
+        else:
+            data.pop("offlineSince",None)
+        return "offlineSince" in data
+
+    def background_batch(self,ident,target,data):
+        if self.db.execute("SELECT count(*) FROM background_batches").fetchone()[0] >= self.max_batches:
+            return False
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO background_batches VALUES(?,?,?,?)",(data["batch"],ident,json.dumps(target),json.dumps(data)))
+        print(f"Soulseek {self.app}: item {ident}: monitoring offline batch in background",flush=True)
+        self.next_candidate(ident,data)
+        return True
+
+    def monitor_background(self,queue):
+        rows = self.db.execute("SELECT * FROM background_batches ORDER BY rowid LIMIT 100").fetchall()
+        for row in rows:
+            ident,data,target = row["id"],json.loads(row["data"]),json.loads(row["target"])
+            try:
+                # Verify actual library files before cancelling any redundant copy.
+                imported = False
+                try:
+                    self.cleanup_import(target,{**data,"handoff":"background"},verify_only=True)
+                    imported = True
+                except (ValueError,KeyError,TypeError):
+                    pass
+                batch = self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}")
+                transfers = self.check_batch(data,batch)
+                offline = self.observe_offline(data,batch)
+                complete = all(f["state"] == "Completed, Succeeded" for f in transfers)
+                failed = any(f["state"].startswith("Completed") and f["state"] != "Completed, Succeeded" for f in transfers)
+                expired = offline and self.clock()-data["offlineSince"] >= self.offline_grace
+                if imported or failed or expired:
+                    if not imported:
+                        reason = "peer offline for 24-hour grace" if expired else "failed background transfer"
+                        key = self.candidate_key(data["username"],data["files"])
+                        with self.db:
+                            self.db.execute("INSERT OR REPLACE INTO failed_candidates VALUES(?,?,?,?)",(ident,key,self.clock()+self.retry_seconds,reason))
+                    self.failed_cleanup(ident,data,queue,reschedule=False)
+                    with self.db:
+                        self.db.execute("DELETE FROM background_batches WHERE batch=?",(data["batch"],))
+                    job = self.db.execute("SELECT state,data FROM jobs WHERE id=?",(ident,)).fetchone()
+                    if job and job["state"] in ("background_wait","candidate_wait"):
+                        if imported:
+                            self.save(ident,"done",data)
+                        else:
+                            self.next_candidate(ident,{**json.loads(job["data"]),"attempted":True})
+                    continue
+                if complete:
+                    job = self.db.execute("SELECT state,data FROM jobs WHERE id=?",(ident,)).fetchone()
+                    if job and job["state"] in ("waiting","background_wait","candidate_wait","downloading","enqueueing","searching"):
+                        current = json.loads(job["data"])
+                        with self.db:
+                            if current.get("batch") and current["batch"] != data["batch"] and job["state"] in ("downloading","enqueueing"):
+                                self.db.execute("INSERT OR IGNORE INTO background_batches VALUES(?,?,?,?)",(current["batch"],ident,json.dumps(target),json.dumps(current)))
+                            data["candidates"] = current.get("candidates",data.get("candidates",[]))
+                            self.db.execute("UPDATE jobs SET state='downloaded',data=?,next_run=0 WHERE id=?",(json.dumps(data),ident))
+                            self.db.execute("DELETE FROM background_batches WHERE batch=?",(data["batch"],))
+                        print(f"Soulseek {self.app}: item {ident}: background batch completed; handing off",flush=True)
+                        continue
+                with self.db:
+                    self.db.execute("UPDATE background_batches SET data=? WHERE batch=?",(json.dumps(data),data["batch"]))
+            except (ApiError,ValueError,KeyError,TypeError,OSError):
+                print(f"Soulseek {self.app}: item {ident}: background recovery deferred",flush=True)
 
     def clear_client_batch(self, data):
         if getattr(self.slsk,"client","slskd") != "nicotine":
             raise ValueError("Client batch cleanup unavailable; retained for review")
         self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}/clear", {})
 
-    def failed_cleanup(self, ident, data, queue):
+    def failed_cleanup(self, ident, data, queue, reschedule=True):
         # Client clears only this owned batch, rejecting any queued/active transfer.
+        self.cancel_client_batch(data)
         self.clear_client_batch(data)
         folder = self.batch_folder(data)
         sources = []
@@ -302,7 +401,8 @@ class Worker:
             path.unlink(missing_ok=True)
         for directory in (folder, Path(data["handoff"]) if "handoff" in data else folder):
             if directory.is_dir() and not any(directory.iterdir()): directory.rmdir()
-        self.next_candidate(ident,data)
+        if reschedule:
+            self.next_candidate(ident,data)
 
     def save(self, ident, state, data, wait=0):
         with self.db:
@@ -418,7 +518,7 @@ class Worker:
             raise ValueError("Batch is outside download root")
         return folder
 
-    def cleanup_import(self, target, data):
+    def cleanup_import(self, target, data, verify_only=False):
         """Verify the accepted command and library before deleting owned sources."""
         if "handoff" not in data:
             if "command" not in data:
@@ -457,6 +557,8 @@ class Worker:
                 raise ValueError("Library file is still in import root")
             if not path.is_file() or path.stat().st_size <= 0:
                 raise ValueError("Library file unavailable")
+        if verify_only:
+            return
         if getattr(self.slsk,"client","slskd") == "nicotine":
             self.clear_client_batch(data)
         sources = []
@@ -658,7 +760,7 @@ class Worker:
             match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+.]|$)", str(version))
             parts = tuple(map(int, match.groups())) if match else ()
         client = getattr(self.slsk, "client", "slskd")
-        minimum = (0, 1, 0) if client == "nicotine" else (0, 26, 0)
+        minimum = (0, 1, 3) if client == "nicotine" else (0, 26, 0)
         if not parts or parts < minimum:
             print(f"Soulseek: {client} API version is unsupported (minimum {'.'.join(map(str, minimum))})", flush=True)
             return
@@ -669,6 +771,7 @@ class Worker:
             print("Soulseek: slskd is disconnected; postponing searches", flush=True)
             return
         queue = self.queued()  # Failure must abort: do not assume an empty queue.
+        self.monitor_background(queue)
         now = self.clock()
         # Reconcile owned transfers first, even when they are outside this page.
         rows = self.db.execute("SELECT * FROM jobs WHERE next_run<=? AND state NOT IN ('done','review','discarded') "
@@ -762,7 +865,7 @@ class Worker:
                 continue
             try:
                 if state == "waiting":
-                    if searches >= 1 or active >= 1 or not self.ready(row, target):
+                    if searches >= 1 or active >= 1 or not self.batch_room(ident) or not self.ready(row, target):
                         with self.db:
                             self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
                         continue
@@ -773,6 +876,11 @@ class Worker:
                         data["audioPolicy"] = self.audio_policy.config
                     self.save(ident, "searching", data, 30)
                     self.slsk.call("api/v0/searches", {"id": data["search"], "searchText": target["query"], "searchTimeout": 15000, "responseLimit": 100, "fileLimit": 10000, "filterResponses": True})
+                elif state == "candidate_wait":
+                    if self.batch_room(ident):
+                        self.next_candidate(ident,data)
+                elif state == "background_wait":
+                    self.save(ident,state,data,60)
                 elif state == "searching":
                     try:
                         result = self.slsk.call(f"api/v0/searches/{data['search']}", includeResponses="true")
@@ -805,10 +913,16 @@ class Worker:
                     expected = {(f["filename"], f["size"]) for f in data["files"]}
                     if {(f["filename"], f["size"]) for f in transfers} != expected:
                         self.save(ident, "review", {**data, "reason": "partial enqueue"})
+                    elif self.observe_offline(data,batch) and self.clock()-data["offlineSince"] >= self.offline_grace:
+                        self.fail_candidate(ident,data,"peer offline for 24-hour grace")
+                    elif batch.get("peerOffline") and self.clock()-data["offlineSince"] >= self.offline_delay and not any(f["state"].startswith("Completed") and f["state"] != "Completed, Succeeded" for f in transfers):
+                        self.background_batch(ident,target,data)
                     elif all(f["state"] == "Completed, Succeeded" for f in transfers):
                         self.save(ident, "downloaded", data)
                     elif any("Completed" in f["state"] and "Succeeded" not in f["state"] for f in transfers):
                         self.fail_candidate(ident,data,"failed transfer") if getattr(self.slsk,"client","slskd") == "nicotine" else self.save(ident,"review",{**data,"reason":"failed transfer"})
+                    else:
+                        self.save(ident,"downloading",data,60)
                 elif state in ("downloaded","publishing"):
                     folder = self.batch_folder(data)
                     if not folder.is_dir():
@@ -893,7 +1007,7 @@ def main():
                 row = connection.execute("SELECT state FROM jobs WHERE id=?", (args.owns,)).fetchone()
         except sqlite3.Error:
             raise SystemExit(0)  # Unreadable state: avoid racing an uncertain job.
-        raise SystemExit(0 if row and row[0] in ("searching", "enqueueing", "downloading", "downloaded", "importing", "handoff", "publishing", "failure_cleanup") else 1)
+        raise SystemExit(0 if row and row[0] in ("searching", "enqueueing", "downloading", "downloaded", "importing", "handoff", "publishing", "failure_cleanup", "background_wait", "candidate_wait") else 1)
     app = os.environ["SOULSEEK_APP"]
     if app not in ("lidarr", "sonarr", "radarr"):
         raise ValueError("Unsupported Arr application")
@@ -937,7 +1051,8 @@ def main():
         worker = Worker(app, Api(url, key), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
                         os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true",
-                        retry_days=os.environ.get("SOULSEEK_FAILED_RETRY_DAYS","7"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
+                        retry_days=os.environ.get("SOULSEEK_FAILED_RETRY_DAYS","30"), search_retry_days=os.environ.get("SOULSEEK_FAILED_SEARCH_DAYS","7"),
+                        offline_delay=os.environ.get("SOULSEEK_OFFLINE_DELAY","900"), offline_grace=os.environ.get("SOULSEEK_OFFLINE_GRACE","86400"), max_batches=os.environ.get("SOULSEEK_MAX_BATCHES","3"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
                         audio_policy=AudioPolicy(os.environ.get("SOULSEEK_AUDIO_FORMAT", "native"), os.environ.get("SOULSEEK_AUDIO_BITRATE", "master"), os.environ.get("SOULSEEK_REQUIRE_QUALITY") == "true") if app == "lidarr" else None,
                         imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None)
         try:

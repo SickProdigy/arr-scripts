@@ -126,31 +126,45 @@ Settings are saved with each new search so active batches retain their policy.
 These audio settings do not affect Sonarr or Radarr.
 
 
-## Failed candidates and retries
+## Failed candidates and background downloads
 
-A failed copy is identified by the album, peer, and remote folder, rather than
-banning the entire peer or giving up on the album. The worker records a local
-failure reason and excludes that candidate for `failedDownloadRetryDays`
-(default 7 days). Cached alternatives from the same search are tried in quality
-order without another search. If those alternatives are exhausted, the album
-waits for that failure cooldown before searching again. An initial search with
-no suitable candidate waits `retryNotFound` (default 90 days). Timers apply to
-albums, so other albums by the same artist can still be searched.
+Nicotine API plugin **0.1.3+** is required for the offline/background lifecycle.
+Upgrade the plugin files and disable/re-enable it before updating these scripts.
 
-Nicotine API plugin **0.1.2+** is required for coordinated cleanup. It clears
-only terminal transfer rows belonging to the recorded batch and never deletes
-files itself. Active/queued transfers or ownership conflicts pause recovery;
-no alternative batch is started while cleanup remains unresolved. Upgrade the
-plugin and disable/re-enable it before updating these scripts.
+Search results are cached and ranked by quality. Failed copies are excluded by
+album, peer, and remote folder for `soulseekFailedRetryDays` (default 30 days).
+This does not ban the peer's other releases. Cached alternatives are tried
+without another search. Exhausting failed candidates uses
+`failedDownloadRetryDays` (default 7 days) before a new search; an initial search
+with no suitable match uses `retryNotFound` (default 90 days).
 
-QueueCleaner skips Soulseek-owned handoffs. The worker records completed import
-warnings, clears the client batch, removes the matching Lidarr queue entry and
-owned files, then selects the next candidate. Successful handoffs also clear
-Nicotine's completed rows before removing original batch files. Unsupported
-client cleanup (including the current slskd adapter) retains the job/files for
-review instead of guessing at removal. Other download clients retain their
-existing native queue-cleaner behavior; this does not introduce a new retry
-engine for qBittorrent or NZB clients.
+After `soulseekOfflineDelay` (default 900 seconds / 15 minutes) continuously
+offline, the worker leaves the original batch queued in Nicotine and frees the
+foreground slot for another candidate or album. Nicotine resumes automatically
+when the peer returns. Background batches are monitored on each worker pass.
+An online peer resets the offline clock; ordinary slow downloads and online
+upload queues are not treated as offline.
 
-Previously discarded jobs remain discarded; this update does not invent lost
-peer/folder identities or automatically retry manually removed jobs.
+After `soulseekOfflineGrace` (default 86400 seconds / 24 hours) continuously
+offline, the worker cancels and clears the owned batch, removes its owned
+leftovers, and applies the candidate exclusion. A completed background copy can
+become the import candidate before expiry. Completed copies still need native
+Lidarr acceptance; completion alone never cancels alternatives. Once library
+files are verified, redundant background copies are cancelled and cleaned.
+
+`soulseekMaxBatches` defaults to **3 outstanding batches per app**, including
+foreground and background copies. At the cap, additional candidates wait.
+This limits album batches, not individual track files, and is not an attempts
+per day limit. State, candidate identity, and offline timestamps survive restarts.
+
+QueueCleaner skips Soulseek-owned handoffs. Explicit failures cancel only the
+recorded batch before clearing its client rows and deleting owned files. The
+Nicotine plugin checks all transfer destinations and sizes before cancellation;
+foreign GUI transfers and uncertain ownership halt recovery. Its optional
+incomplete-file cleanup removes only validated partials belonging to the
+cancelled batch. Personal downloads and unknown files remain untouched.
+
+The current slskd adapter does not expose the verified offline/cancellation
+contract, so unsupported recovery retains its job/files for review. Other
+clients retain their native queue-cleaner behavior. Previously discarded jobs
+remain discarded; the worker does not invent lost peer/folder identities.

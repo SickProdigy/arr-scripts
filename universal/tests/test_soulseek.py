@@ -137,6 +137,16 @@ class Soulseek:
             if self.lose_reply:
                 raise soulseek.ApiError()
             return {}
+        if path.endswith("/cancel") or path.endswith("/clear"):
+            self.posts.append((path,data))
+            ident = path.split("/")[-2]
+            batch = self.batches[ident]
+            if path.endswith("/cancel"):
+                for file in batch["transfers"]:
+                    if file["state"] != "Completed, Succeeded": file["state"] = "Completed, Aborted"
+            else:
+                batch["cleared"] = True
+            return {}
         if path.startswith("api/v0/transfers/downloads/batches/"):
             ident = path.rsplit("/", 1)[-1]
             if ident not in self.batches:
@@ -196,7 +206,7 @@ class WorkerTests(unittest.TestCase):
         self.worker.next_candidate(1,data)
         self.assertEqual(self.row()["state"],"waiting")
         self.assertEqual(self.row()["next_run"],self.now+7*86400)
-        self.now += 7*86400+1
+        self.now += 30*86400+1
         self.assertFalse(self.worker.excluded(1,candidate))
 
     def test_failed_cleanup_retains_files_when_client_is_active(self):
@@ -226,7 +236,7 @@ class WorkerTests(unittest.TestCase):
         self.slsk.client = "nicotine"
         def clear(path,payload):
             self.assertTrue(source.exists())
-            self.assertTrue(path.endswith("/clear"))
+            self.assertTrue(path.endswith(("/cancel","/clear")))
         with patch.object(self.slsk,"call",side_effect=clear):
             self.worker.failed_cleanup(1,data,[])
         self.assertFalse(source.exists())
@@ -257,8 +267,13 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(self.slsk.posts)
         self.assertIsNone(self.row())
 
+    def test_old_nicotine_api_defers_before_searching(self):
+        self.slsk.client,self.slsk.version="nicotine","0.1.2"
+        self.tick()
+        self.assertFalse(self.slsk.searches)
+
     def test_nicotine_uses_plugin_version_and_capabilities(self):
-        self.slsk.client, self.slsk.version = "nicotine", "0.1.0"
+        self.slsk.client, self.slsk.version = "nicotine", "0.1.3"
         self.tick()
         self.assertEqual(self.row()["state"], "searching")
 
@@ -743,6 +758,129 @@ class HandoffTests(unittest.TestCase):
         self.worker.tick()
         self.assertEqual(self.worker.db.execute("SELECT state FROM jobs WHERE id=1").fetchone()[0],"failure_cleanup")
         self.assertFalse(published.exists())
+
+
+class BackgroundTests(unittest.TestCase):
+    setUp = WorkerTests.setUp
+    tearDown = WorkerTests.tearDown
+    tick = WorkerTests.tick
+    row = WorkerTests.row
+
+    def seed(self, alternatives=False):
+        self.slsk.client,self.slsk.version = "nicotine","0.1.3"
+        self.tick()
+        self.tick()
+        self.tick()
+        data = json.loads(self.row()["data"])
+        target = json.loads(self.row()["target"])
+        if alternatives:
+            data["candidates"] = [dict(username="other",files=data["files"])]
+        self.slsk.batches[data["batch"]]["peerOffline"] = True
+        data["offlineSince"] = self.now
+        self.worker.save(1,"downloading",data)
+        return target,data
+
+    def test_offline_retains_original_and_launches_alternative_after_15_minutes(self):
+        target,data = self.seed(alternatives=True)
+        self.tick(899)
+        self.assertEqual(self.row()["state"],"downloading")
+        self.tick(61)
+        self.assertEqual(self.row()["state"],"enqueueing")
+        self.assertEqual(json.loads(self.row()["data"])["username"],"other")
+        self.assertEqual(self.worker.db.execute("SELECT count(*) FROM background_batches").fetchone()[0],1)
+        self.assertFalse(any(path.endswith(("/clear","/cancel")) for path,_ in self.slsk.posts))
+
+    def test_original_finishes_and_replacement_is_preserved_until_import(self):
+        target,data = self.seed(alternatives=True)
+        self.worker.background_batch(1,target,data)
+        self.tick()
+        replacement = json.loads(self.row()["data"])["batch"]
+        batch = self.slsk.batches[data["batch"]]
+        batch["peerOffline"] = False
+        for file in batch["transfers"]: file["state"] = "Completed, Succeeded"
+        self.worker.monitor_background([])
+        self.assertEqual(self.row()["state"],"downloaded")
+        self.assertEqual(json.loads(self.row()["data"])["batch"],data["batch"])
+        self.assertEqual(self.worker.db.execute("SELECT batch FROM background_batches").fetchone()[0],replacement)
+        self.assertFalse(any(path.endswith("/cancel") for path,_ in self.slsk.posts))
+
+    def test_background_expiry_uses_24_hours_and_30_day_exclusion(self):
+        target,data = self.seed()
+        self.worker.background_batch(1,target,data)
+        self.now += 86399
+        self.worker.monitor_background([])
+        self.assertEqual(self.worker.db.execute("SELECT count(*) FROM background_batches").fetchone()[0],1)
+        self.now += 1
+        self.worker.monitor_background([])
+        self.assertEqual(self.worker.db.execute("SELECT count(*) FROM background_batches").fetchone()[0],0)
+        expiry = self.worker.db.execute("SELECT expires FROM failed_candidates").fetchone()[0]
+        self.assertEqual(expiry,self.now+30*86400)
+        self.assertEqual(self.row()["state"],"waiting")
+        self.assertTrue(self.slsk.batches[data["batch"]]["cleared"])
+
+    def test_background_timeout_api_failure_keeps_journal_and_files(self):
+        target,data=self.seed()
+        self.worker.background_batch(1,target,data)
+        folder=self.root/data["batch"]
+        folder.mkdir()
+        source=folder/"Movie.2020.1080p.mkv"
+        source.write_bytes(b"test")
+        self.now += 86400
+        original=self.slsk.call
+        def unavailable(path,*args,**kwargs):
+            if path.endswith("/cancel"):
+                raise soulseek.ApiError()
+            return original(path,*args,**kwargs)
+        with patch.object(self.slsk,"call",side_effect=unavailable):
+            self.worker.monitor_background([])
+        self.assertTrue(source.exists())
+        self.assertEqual(self.worker.db.execute("SELECT count(*) FROM background_batches").fetchone()[0],1)
+
+    def test_returning_peer_resets_offline_clock(self):
+        target,data = self.seed()
+        self.worker.background_batch(1,target,data)
+        self.now += 86000
+        self.slsk.batches[data["batch"]]["peerOffline"] = False
+        self.worker.monitor_background([])
+        saved=json.loads(self.worker.db.execute("SELECT data FROM background_batches").fetchone()[0])
+        self.assertNotIn("offlineSince",saved)
+        self.slsk.batches[data["batch"]]["peerOffline"] = True
+        self.now += 1000
+        self.worker.monitor_background([])
+        saved=json.loads(self.worker.db.execute("SELECT data FROM background_batches").fetchone()[0])
+        self.assertEqual(saved["offlineSince"],self.now)
+
+    def test_background_journal_survives_restart_and_bounds_candidates(self):
+        target,data = self.seed()
+        self.worker.background_batch(1,target,data)
+        self.worker.db.close()
+        self.worker=soulseek.Worker("radarr",self.arr,self.slsk,self.root,self.root,clock=lambda:self.now,max_batches=1)
+        self.assertFalse(self.worker.batch_room(1))
+        self.worker.next_candidate(1,dict(search="search",candidates=[dict(username="other",files=data["files"])]))
+        self.assertEqual(self.row()["state"],"candidate_wait")
+        self.assertEqual(len(self.slsk.batches),1)
+
+    def test_missing_library_file_does_not_cancel_background(self):
+        target,data = self.seed()
+        self.worker.background_batch(1,target,data)
+        self.arr.movies[0].update(hasFile=True,movieFile={"path":str(self.root/"missing-library.mkv")})
+        self.worker.monitor_background([])
+        self.assertFalse(any(path.endswith("/cancel") for path,_ in self.slsk.posts))
+
+    def test_verified_library_cancels_and_clears_redundant_copy(self):
+        target,data = self.seed()
+        self.worker.background_batch(1,target,data)
+        library=self.root.parent/("library-"+data["batch"]+".mkv")
+        library.write_bytes(b"library")
+        try:
+            self.arr.movies[0].update(hasFile=True,movieFile={"path":str(library)})
+            self.worker.monitor_background([])
+            self.assertTrue(library.exists())
+            self.assertEqual(self.row()["state"],"done")
+            self.assertTrue(self.slsk.batches[data["batch"]]["cleared"])
+            self.assertEqual(self.worker.db.execute("SELECT count(*) FROM background_batches").fetchone()[0],0)
+        finally:
+            library.unlink(missing_ok=True)
 
 
 class ClientTests(unittest.TestCase):

@@ -12,7 +12,7 @@ each Arr container; it does not install or start slskd itself. SoulseekQt and
 ordinary Nicotine+ installations do not expose this API. For Nicotine+, install the API plugin from the separate repository. The initial
 supported target is Nicotine+ 3.3.11 with Python 3.9+. Set `soulseekClient="nicotine"`
 and `soulseekUrl="http://nicotineplus:12339"`, with the plugin's key in `soulseekApiKey`.
-Its API version is independent of slskd; the worker requires plugin version 0.1.0
+Its API version is independent of slskd; the worker requires plugin version 0.1.3
 and the advertised search and batch capabilities. Keep Nicotine+ running and
 connected. You can continue using its GUI.
 
@@ -116,10 +116,9 @@ season packs are skipped. Conservative matching can miss valid releases.
 
 For Lidarr, completed albums use the existing Usenet Blackhole client watching
 `importPath`, matching the Tidal/Deezer Activity queue workflow. Publication is
-atomic: incomplete audio never enters that folder. Import failures hold the
-single Soulseek slot until resolved through Lidarr; successful imports disappear
-and removal with delete-files selected releases the slot without re-downloading
-that job. See the [Lidarr guide](../lidarr/soulseek.md). The remaining direct-import
+atomic: incomplete audio never enters that folder. Soulseek-owned rejection
+recovery records failed candidates and coordinates client cleanup before trying
+another copy; successful imports disappear. Uncertain ownership retains files. See the [Lidarr guide](../lidarr/soulseek.md). The remaining direct-import
 behavior below applies to Sonarr/Radarr and older reviewed Lidarr jobs.
 
 Completed downloads are isolated under `<batch UUID>` inside
@@ -147,11 +146,17 @@ overlapping workers. For a read-only connection and wanted-list check, run
 (replace the app as needed). This bypasses the worker lock, prints no credentials,
 and does not start searches or downloads.
 
-At most one job actively searches, downloads, or imports per application.
-A queued or slow transfer holds that slot until it finishes or requires review.
-The limit counts albums in Lidarr, not individual tracks; one album can contain
-many files. Tidal and Deezer continue independently. Previously active jobs are
-retained; no new searches start until they drop below the new limit. Search misses wait one day; API failures defer for five minutes.
+One foreground selection runs per application. With Nicotine API 0.1.3+, a peer
+continuously offline for 15 minutes can remain queued in the background while
+another candidate or album proceeds. The default cap is 3 outstanding batches
+per app, including background and retained uncertain copies. Offline copies
+get 24 hours to recover; a returning peer resets that clock. Failed peer/folder
+candidates are excluded for 30 days. Slow online downloads retain their slot.
+The limit counts album batches, not tracks; one album can contain many files.
+Tidal and Deezer continue independently. Initial search misses use retryNotFound;
+exhausted failed candidates use failedDownloadRetryDays before a new search.
+API failures defer for five minutes. See the [Lidarr guide](../lidarr/soulseek.md)
+for settings and cancellation safeguards.
 Searches and download batches have durable IDs; uncertain download requests are
 reconciled rather than blindly submitted again.
 
@@ -175,8 +180,9 @@ worker. The flag confirms cancellation you performed; it does not cancel remote
 transfers. It retains all ownership/path checks and will not discard uncertain
 imports or albums handed to Lidarr's Activity queue.
 
-Failed transfers, partial batches, ambiguous imports and uncertain import replies
-enter `review` state and are logged by item ID. Files are retained. After fixing
+Partial batches, ambiguous imports and uncertain import replies enter `review`
+state and are logged by item ID. Nicotine failures use coordinated cancellation
+and candidate retry; unsupported client cleanup retains files for review. After fixing
 the cause, use `ARR_SOULSEEK_APP=lidarr bash /config/extended/Soulseek.bash --retry 123`
 (substitute the app and item ID). A retried batch is checked again before import;
 failed batches require resolving their transfers in slskd first. No global
