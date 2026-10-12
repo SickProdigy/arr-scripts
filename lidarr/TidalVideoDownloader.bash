@@ -38,10 +38,11 @@ verifyConfig () {
 		sleep infinity
 	fi
   
-	if [ "$dlClientSource" == "tidal" ] || [ "$dlClientSource" == "both" ]; then
+	normalizedSources=",${dlClientSource//[[:space:]]/},"
+	if [[ "$normalizedSources" == *,tidal,* || "$normalizedSources" == *,both,* || "$normalizedSources" == *,all,* ]]; then
  		sleep 0.01
 	else
-		log "ERROR: Tidal is not enabled, set dlClientSource setting to either \"both\" or \"tidal\"..."
+		log "ERROR: Tidal is not enabled; include \"tidal\" or select \"all\" in dlClientSource..."
  		log "Sleeping (infinity)"
 		sleep infinity
 	fi

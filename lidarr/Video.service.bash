@@ -47,7 +47,8 @@ verifyConfig () {
 }
 
 Configuration () {
-	if [ "$dlClientSource" = "tidal" ] || [ "$dlClientSource" = "both" ]; then
+	normalizedSources=",${dlClientSource//[[:space:]]/},"
+	if [[ "$normalizedSources" == *,tidal,* || "$normalizedSources" == *,both,* || "$normalizedSources" == *,all,* ]]; then
 		sourcePreference=tidal
 	fi
 
