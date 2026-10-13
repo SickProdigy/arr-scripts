@@ -12,6 +12,7 @@ networkMaxTime="${networkMaxTime:-60}"
 networkRetryCount="${networkRetryCount:-2}"
 lidarrTaskWaitTimeout="${lidarrTaskWaitTimeout:-300}"
 lidarrPageSize="${lidarrPageSize:-250}"
+streamingNotFoundRetrySchedule="${streamingNotFoundRetrySchedule:-7,30,60}"
 
 if [[ ! "$lidarrPageSize" =~ ^[1-9][0-9]*$ ]]; then
 	lidarrPageSize=250
@@ -92,6 +93,37 @@ RecordFailedDownload () {
 	failureNumber=$((failureNumber + 1))
 	printf 'timestamp=%s\nprovider=%s\nattempts=%s\nfailures=%s\nreason=%s\n' \
 		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$provider" "$attempts" "$failureNumber" "$reason" > "$marker"
+	chmod 666 "$marker"
+}
+
+StreamingNotFoundCooldownDays () {
+	local failureNumber="$1"
+	local schedule=()
+	local value
+	local index
+	IFS=',' read -ra schedule <<< "${streamingNotFoundRetrySchedule//[[:space:]]/}"
+	for value in "${schedule[@]}"; do
+		if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+			schedule=(7 30 60)
+			break
+		fi
+	done
+	if [ "${#schedule[@]}" -eq 0 ]; then schedule=(7 30 60); fi
+	index=$((failureNumber - 1))
+	if [ "$index" -ge "${#schedule[@]}" ]; then index=$((${#schedule[@]} - 1)); fi
+	printf '%s\n' "${schedule[$index]}"
+}
+
+RecordStreamingNotFound () {
+	local marker="$1"
+	local history="/config/extended/logs/notfound-history/$(basename "$marker")"
+	local failureNumber
+	mkdir -p /config/extended/logs/notfound-history
+	failureNumber=$(sed -n 's/^failures=//p' "$history" 2>/dev/null | head -n1)
+	[[ "$failureNumber" =~ ^[1-9][0-9]*$ ]] || failureNumber=0
+	failureNumber=$((failureNumber + 1))
+	printf 'timestamp=%s\nfailures=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$failureNumber" > "$marker"
+	rm -f "$history"
 	chmod 666 "$marker"
 }
 
@@ -415,14 +447,28 @@ DownloadFolderCleaner () {
 }
 
 NotFoundFolderCleaner () {
-	# check for completed download folder
+	local marker
+	local history
+	local failureNumber
+	local cooldownDays
+	local markerTime
+	local now
 	if [ -d /config/extended/logs/notfound ]; then
-		# check for notfound entries older than X days
-		if find /config/extended/logs/notfound -mindepth 1 -type f -mtime +$retryNotFound | read; then
-			log "Removing prevously notfound lidarr album ids older than $retryNotFound days to give them a retry..."
-			# delete ntofound entries older than X days
-			find /config/extended/logs/notfound -mindepth 1 -type f -mtime +$retryNotFound -delete
-		fi
+		mkdir -p /config/extended/logs/notfound-history
+		now=$(date +%s)
+		while IFS= read -r -d '' marker; do
+			failureNumber=$(sed -n 's/^failures=//p' "$marker" 2>/dev/null | head -n1)
+			[[ "$failureNumber" =~ ^[1-9][0-9]*$ ]] || failureNumber=1
+			cooldownDays=$(StreamingNotFoundCooldownDays "$failureNumber")
+			markerTime=$(stat -c %Y "$marker" 2>/dev/null) || markerTime="$now"
+			if [ $((now - markerTime)) -ge $((cooldownDays * 86400)) ]; then
+				history="/config/extended/logs/notfound-history/$(basename "$marker")"
+				printf 'failures=%s\n' "$failureNumber" > "$history"
+				chmod 666 "$history"
+				rm -f "$marker"
+				log "Streaming not-found retry released after $cooldownDays days: $(basename "$marker")"
+			fi
+		done < <(find /config/extended/logs/notfound -mindepth 1 -maxdepth 1 -type f -print0)
 	fi
 }
 
@@ -1410,8 +1456,7 @@ SearchProcess () {
 		if [ -f "/config/extended/logs/downloaded/notfound/$lidarrAlbumForeignAlbumId" ]; then
 			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrAlbumTitle :: $lidarrAlbumType :: Previously Not Found, skipping..."
 			rm "/config/extended/logs/downloaded/notfound/$lidarrAlbumForeignAlbumId"
-			touch "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId"
-			chmod 777 "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId"
+			RecordStreamingNotFound "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId"
 			continue
 		fi
 
@@ -1649,8 +1694,7 @@ SearchProcess () {
 				if [ "$skipNotFoundLogCreation" == "false" ]; then
 					log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Marking Album as notfound"
 					if [ ! -f "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId" ]; then
-						touch "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId"
-						chmod 777 "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId"
+						RecordStreamingNotFound "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId"
 					fi
 				else
 					log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Skip marking album as not found because it's a new release for 7 days..."
@@ -1659,6 +1703,9 @@ SearchProcess () {
 			fi
 		done
 
+		if [ "$lidarrDownloadImportNotfication" == "true" ]; then
+			rm -f /config/extended/logs/notfound/"$wantedAlbumId"--* /config/extended/logs/notfound-history/"$wantedAlbumId"--*
+		fi
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Search Complete..." 
 	done
 }
