@@ -15,7 +15,9 @@ export SOULSEEK_CLIENT="${soulseekClient:-slskd}"
 export SOULSEEK_URL="${soulseekUrl:-http://slskd:5030}"
 export SOULSEEK_API_KEY="${soulseekApiKey:-}"
 export SOULSEEK_DOWNLOAD_PATH="${soulseekDownloadPath:-/downloads/soulseek}"
-export SOULSEEK_FAILED_SEARCH_DAYS="${failedDownloadRetryDays:-7}"
+# Soulseek catalog misses use their own fixed retry. failedDownloadRetryDays may
+# be a comma-separated Tidal/Deezer schedule and therefore is not valid here.
+export SOULSEEK_FAILED_SEARCH_DAYS="${soulseekFailedSearchDays:-7}"
 export SOULSEEK_FAILED_RETRY_DAYS="${soulseekFailedRetryDays:-30}"
 export SOULSEEK_OFFLINE_DELAY="${soulseekOfflineDelay:-900}"
 export SOULSEEK_OFFLINE_GRACE="${soulseekOfflineGrace:-86400}"

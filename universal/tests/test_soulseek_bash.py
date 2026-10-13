@@ -36,6 +36,20 @@ class WrapperTests(unittest.TestCase):
                 result = subprocess.run([BASH, str(ROOT/"universal/Soulseek.bash")], env=env, capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_streaming_retry_schedule_is_not_passed_to_soulseek(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            conf = root/"extended.conf"
+            worker = root/"worker.py"
+            conf.write_text('enableSoulseek="true"\ndlClientSource="all"\nfailedDownloadRetryDays="7,14,30"\nsoulseekFailedSearchDays="7"\n', encoding="utf-8")
+            worker.write_text('import os\nprint(os.environ["SOULSEEK_FAILED_SEARCH_DAYS"])\n', encoding="utf-8")
+            env = {**os.environ, "ARR_EXTENDED_CONF": str(conf), "ARR_SOULSEEK_APP": "lidarr",
+                   "ARR_SOULSEEK_WORKER": str(worker), "ARR_CONFIG_DIR": str(root)}
+            result = subprocess.run([BASH, str(ROOT/"universal/Soulseek.bash")], env=env,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "7")
+
     def test_every_installer_downloads_worker_and_correct_service(self):
         for app in ("lidarr", "sonarr", "radarr"):
             source = (ROOT/app/"setup.bash").read_text(encoding="utf-8")

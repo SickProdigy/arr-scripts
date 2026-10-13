@@ -1083,6 +1083,8 @@ if __name__ == "__main__":
     try:
         main()
     except (ApiError, ValueError, KeyError, OSError, ET.ParseError) as error:
-        detail = str(error) if isinstance(error, ApiError) else type(error).__name__
+        # ValueError messages describe local validation failures and make bad
+        # configuration actionable. API bodies and peer data remain hidden.
+        detail = str(error) if isinstance(error, (ApiError, ValueError)) and str(error) else type(error).__name__
         print(f"Soulseek: {detail}; check configuration and API availability", flush=True)
         raise SystemExit(1)

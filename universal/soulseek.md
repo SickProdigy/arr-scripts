@@ -154,7 +154,8 @@ get 24 hours to recover; a returning peer resets that clock. Failed peer/folder
 candidates are excluded for 30 days. Slow online downloads retain their slot.
 The limit counts album batches, not tracks; one album can contain many files.
 Tidal and Deezer continue independently. Initial search misses use retryNotFound;
-exhausted failed candidates use failedDownloadRetryDays before a new search.
+exhausted failed candidates use `soulseekFailedSearchDays` (7 days by default)
+before a new search.
 API failures defer for five minutes. See the [Lidarr guide](../lidarr/soulseek.md)
 for settings and cancellation safeguards.
 Searches and download batches have durable IDs; uncertain download requests are
