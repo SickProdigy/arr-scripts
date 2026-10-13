@@ -56,6 +56,12 @@ class RatingsWrapperTests(unittest.TestCase):
         self.assertEqual(self.run_wrapper(fail=True)[0], 0)
         self.assertEqual(self.run_wrapper(fail=True, arguments=("--work",))[0], 1)
 
+    def test_success_output_is_not_reported_as_lidarr_error(self):
+        code, _, stdout, stderr = self.run_wrapper(helper_message="INFO queued", capture_output=True)
+        self.assertEqual(code, 0)
+        self.assertIn("INFO queued", stdout)
+        self.assertEqual(stderr, "")
+
     def test_library_backfill_needs_no_album(self):
         code, trace = self.run_wrapper(beets="true", album="", arguments=("--library",))
         self.assertEqual(code, 0)

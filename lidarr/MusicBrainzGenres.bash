@@ -55,6 +55,12 @@ if [ "${1:-}" = "--library" ]; then
     # Explicit batch command: retain failure exit status so incomplete exports are visible.
     exec "$helper" scan --queue-dir "$queue" "${profileArguments[@]}" --source "$genreSource"
 fi
-"$helper" enqueue --queue-dir "$queue" "${profileArguments[@]}" --album-id "$album" --source "$genreSource" || \
+output=$("$helper" enqueue --queue-dir "$queue" "${profileArguments[@]}" --album-id "$album" --source "$genreSource" 2>&1)
+status=$?
+if [ "$status" = "0" ]; then
+    [ -z "$output" ] || printf '%s\n' "$output"
+else
+    [ -z "$output" ] || printf '%s\n' "$output" >&2
     echo "MusicBrainz genres: queue failed; media import remains successful" >&2
+fi
 exit 0

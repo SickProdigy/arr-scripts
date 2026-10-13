@@ -242,6 +242,29 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(source.exists())
         self.assertEqual(self.row()["state"],"waiting")
 
+    def test_missing_client_batch_is_already_clean(self):
+        self.slsk.client = "nicotine"
+        data = {"batch": str(soulseek.uuid.uuid4())}
+        with patch.object(self.slsk, "call", side_effect=soulseek.ApiError(404, "Nicotine API")):
+            self.worker.cancel_client_batch(data)
+            self.worker.clear_client_batch(data)
+
+    def test_absent_owned_artifacts_finish_without_library_verification(self):
+        self.slsk.client = "nicotine"
+        data = {"batch": str(soulseek.uuid.uuid4()), "destination": str(soulseek.uuid.uuid4()),
+                "handoff": str(self.root/"absent-handoff")}
+        data["destination"] = data["batch"]
+        with patch.object(self.slsk, "call", side_effect=soulseek.ApiError(404, "Nicotine API")):
+            self.assertTrue(self.worker.finish_absent_artifacts(data))
+        (self.root/data["batch"]).mkdir()
+        with patch.object(self.slsk, "call") as call:
+            self.assertFalse(self.worker.finish_absent_artifacts(data))
+            call.assert_not_called()
+
+    def test_api_errors_identify_the_failed_service(self):
+        self.assertEqual(str(soulseek.ApiError(service="Lidarr API")), "Lidarr API unavailable")
+        self.assertEqual(str(soulseek.ApiError(404, "Nicotine API")), "Nicotine API HTTP 404")
+
     def test_version_and_disconnection_prevent_searches(self):
         self.slsk.version = "0.25.1"
         self.tick()

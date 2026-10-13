@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.33"
+scriptVersion="1.4.34"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 

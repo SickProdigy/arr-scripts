@@ -33,6 +33,12 @@ album="${lidarr_album_id:-${2:-}}"
 source /config/extended/functions
 getArrAppInfo
 export LIDARR_URL="$arrUrl" LIDARR_API_KEY="$arrApiKey"
-"$helper" enqueue --state-dir /config/extended/ratings-helper --album-id "$album" || \
+output=$("$helper" enqueue --state-dir /config/extended/ratings-helper --album-id "$album" 2>&1)
+status=$?
+if [ "$status" = "0" ]; then
+    [ -z "$output" ] || printf '%s\n' "$output"
+else
+    [ -z "$output" ] || printf '%s\n' "$output" >&2
     echo "Ratings: queue failed; media import remains successful" >&2
+fi
 exit 0

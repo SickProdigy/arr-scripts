@@ -18,7 +18,7 @@ def shell_path(path):
 class GenreWrapperTests(unittest.TestCase):
     def run_wrapper(self, enabled="true", beets="false", event="Download", arguments=(), album="123", fail=False,
                     username="sickprodigy", password="fake-password", script_name="MusicBrainzGenres.bash",
-                    helper_name="musicbrainz-genres", extra_config=""):
+                    helper_name="musicbrainz-genres", extra_config="", helper_message="", capture_output=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             extended = root / "extended"
@@ -37,14 +37,18 @@ class GenreWrapperTests(unittest.TestCase):
             script = root / "wrapper.bash"
             script.write_text((ROOT / script_name).read_text().replace(
                 "/config/", shell_path(root) + "/"), encoding="utf-8")
-            environment = {**os.environ, "TRACE": shell_path(trace), "FAKE_EXIT": "1" if fail else "0",
+            helper_source = (tools / helper_name).read_text(encoding="utf-8").replace(
+                'exit "${FAKE_EXIT:-0}"', 'printf "%s" "${FAKE_MESSAGE:-}" >&2\nexit "${FAKE_EXIT:-0}"')
+            (tools / helper_name).write_text(helper_source, encoding="utf-8")
+            environment = {**os.environ, "TRACE": shell_path(trace), "FAKE_EXIT": "1" if fail else "0", "FAKE_MESSAGE": helper_message,
                            "lidarr_eventtype": event, "lidarr_album_id": album,
                            "PATH": shell_path(tools) + ":/usr/bin:/bin"}
             subprocess.run([BASH, "-c", 'chmod +x "$1"', "--", shell_path(tools / helper_name)],
                            check=True, env=environment, capture_output=True)
             result = subprocess.run([BASH, shell_path(script), *arguments], env=environment,
                                     capture_output=True, text=True)
-            return result.returncode, trace.read_text().splitlines() if trace.exists() else []
+            value = (result.returncode, trace.read_text().splitlines() if trace.exists() else [])
+            return (*value, result.stdout, result.stderr) if capture_output else value
 
     def test_test_event_and_disabled_feature_do_not_start_work(self):
         self.assertEqual(self.run_wrapper(event="Test"), (0, []))
@@ -103,6 +107,15 @@ class GenreWrapperTests(unittest.TestCase):
         self.assertIn("enqueue", trace)
         code, _ = self.run_wrapper(fail=True, arguments=("--work",))
         self.assertEqual(code, 1)
+
+    def test_success_output_is_not_reported_as_lidarr_error(self):
+        code, _, stdout, stderr = self.run_wrapper(helper_message="INFO queued", capture_output=True)
+        self.assertEqual(code, 0)
+        self.assertIn("INFO queued", stdout)
+        self.assertEqual(stderr, "")
+        code, _, _, stderr = self.run_wrapper(fail=True, helper_message="real failure", capture_output=True)
+        self.assertEqual(code, 0)
+        self.assertIn("real failure", stderr)
 
     def test_invalid_album_does_not_queue(self):
         self.assertEqual(self.run_wrapper(album="../invalid"), (0, []))

@@ -44,9 +44,9 @@ def AudioPolicy(*args, **kwargs):
 
 
 class ApiError(RuntimeError):
-    def __init__(self, status=0):
+    def __init__(self, status=0, service="API"):
         self.status = status
-        super().__init__(f"API HTTP {status}" if status else "API unavailable")
+        super().__init__(f"{service} HTTP {status}" if status else f"{service} unavailable")
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -55,13 +55,13 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class Api:
-    def __init__(self, url, key):
+    def __init__(self, url, key, service="Arr API"):
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.netloc or parts.username or parts.query:
             raise ValueError("Invalid API URL")
         if not key:
             raise ValueError("Missing API key")
-        self.url, self.key = url.rstrip("/"), key
+        self.url, self.key, self.service = url.rstrip("/"), key, service
         self.opener = build_opener(NoRedirect())
 
     def delete(self, path, **query):
@@ -79,9 +79,9 @@ class Api:
         except HTTPError as error:
             status = error.code
             error.close()
-            raise ApiError(status) from None
+            raise ApiError(status, self.service) from None
         except (URLError, TimeoutError, OSError, ValueError):
-            raise ApiError() from None
+            raise ApiError(service=self.service) from None
 
 
 class SoulseekApi(Api):
@@ -89,7 +89,7 @@ class SoulseekApi(Api):
     def __init__(self, url, key, client="slskd"):
         if client not in ("slskd", "nicotine"):
             raise ValueError("Select slskd or nicotine")
-        super().__init__(url, key)
+        super().__init__(url, key, "Nicotine API" if client == "nicotine" else "slskd API")
         self.client = client
 
     def call(self, path, data=None, **query):
@@ -295,7 +295,11 @@ class Worker:
     def cancel_client_batch(self,data):
         if getattr(self.slsk,"client","slskd") != "nicotine":
             raise ValueError("Client cancellation unavailable")
-        self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}/cancel",{"cleanupIncomplete":True})
+        try:
+            self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}/cancel",{"cleanupIncomplete":True})
+        except ApiError as error:
+            if error.status != 404:
+                raise
 
     def check_batch(self,data,batch):
         transfers = batch.get("transfers") or []
@@ -374,7 +378,21 @@ class Worker:
     def clear_client_batch(self, data):
         if getattr(self.slsk,"client","slskd") != "nicotine":
             raise ValueError("Client batch cleanup unavailable; retained for review")
-        self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}/clear", {})
+        try:
+            self.slsk.call(f"api/v0/transfers/downloads/batches/{data['batch']}/clear", {})
+        except ApiError as error:
+            if error.status != 404:
+                raise
+
+    def finish_absent_artifacts(self, data):
+        """Converge cleanup when every worker-owned local artifact is already gone."""
+        folder = self.batch_folder(data)
+        handoff = Path(data["handoff"]) if data.get("handoff") else None
+        if folder.exists() or (handoff is not None and handoff.exists()):
+            return False
+        if getattr(self.slsk, "client", "slskd") == "nicotine":
+            self.clear_client_batch(data)  # A missing batch (404) is already clean.
+        return True
 
     def failed_cleanup(self, ident, data, queue, reschedule=True):
         # Client clears only this owned batch, rejecting any queued/active transfer.
@@ -859,12 +877,15 @@ class Worker:
                 if state in ("importing", "cleanup", "handoff", "publishing", "failure_cleanup"):
                     try:
                         original = data.get("importTarget", json.loads(row["target"]))
-                        if "handoff" in data:
+                        if "handoff" in data and self.finish_absent_artifacts(data):
+                            pass
+                        elif "handoff" in data:
                             self.cleanup_handoff(original, data)
                         else:
                             self.cleanup_import(original, data)
                     except (ApiError, ValueError, KeyError, TypeError, OSError) as error:
-                        print(f"Soulseek {self.app}: item {ident}: cleanup {type(error).__name__}; retained", flush=True)
+                        detail = str(error) if isinstance(error, (ApiError, ValueError)) and str(error) else type(error).__name__
+                        print(f"Soulseek {self.app}: item {ident}: cleanup {detail}; retained", flush=True)
                         self.save(ident, "cleanup", data, 300)
                         continue
                 if state != "done":
@@ -1037,7 +1058,7 @@ def main():
         print("Client API version:", slsk.call("api/v0/application/version"), flush=True)
         application = slsk.call("api/v0/application")
         print("Soulseek connected:", bool((application.get("server") or {}).get("isConnected")), flush=True)
-        arr = Api(url, key)
+        arr = Api(url, key, f"{app.capitalize()} API")
         prefix = "api/v1/" if app == "lidarr" else "api/v3/"
         missing = arr.call(prefix+"wanted/missing", page=1, pageSize=5, sortKey="id", sortDirection="ascending")
         print("Arr wanted/missing total:", missing.get("totalRecords"), flush=True)
@@ -1057,7 +1078,7 @@ def main():
                 print("Soulseek: worker busy; rerun this command after the current pass", flush=True)
                 raise SystemExit(1)
             return
-        worker = Worker(app, Api(url, key), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
+        worker = Worker(app, Api(url, key, f"{app.capitalize()} API"), SoulseekApi(os.environ["SOULSEEK_URL"], os.environ["SOULSEEK_API_KEY"], os.environ.get("SOULSEEK_CLIENT", "slskd")),
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
                         os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true",
                         retry_days=os.environ.get("SOULSEEK_FAILED_RETRY_DAYS","30"), search_retry_days=os.environ.get("SOULSEEK_FAILED_SEARCH_DAYS","7"),
