@@ -39,6 +39,10 @@ FailedDownloadIsBlocked () {
 	local markerTime
 	local now
 	local cooldownSeconds
+	local cooldownDays
+	local failureNumber
+	local scheduleIndex
+	local retrySchedule=()
 	local remainingHours
 
 	[ -f "$marker" ] || return 1
@@ -47,22 +51,31 @@ FailedDownloadIsBlocked () {
 		return 0
 	fi
 
-	if [[ ! "$failedDownloadRetryDays" =~ ^[0-9]+$ ]]; then
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Invalid failedDownloadRetryDays value; using 7 days..."
-		failedDownloadRetryDays=7
-	fi
+	IFS=',' read -ra retrySchedule <<< "${failedDownloadRetryDays//[[:space:]]/}"
+	if [ "${#retrySchedule[@]}" -eq 0 ]; then retrySchedule=(7 14 30); fi
+	for cooldownDays in "${retrySchedule[@]}"; do
+		if [[ ! "$cooldownDays" =~ ^[1-9][0-9]*$ ]]; then
+			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Invalid failedDownloadRetryDays schedule; using 7,14,30 days..."
+			retrySchedule=(7 14 30)
+			break
+		fi
+	done
 
 	markerTime=$(stat -c %Y "$marker" 2>/dev/null) || markerTime=0
+	failureNumber=$(sed -n 's/^failures=//p' "$marker" 2>/dev/null | head -n1)
+	[[ "$failureNumber" =~ ^[1-9][0-9]*$ ]] || failureNumber=1
+	scheduleIndex=$((failureNumber - 1))
+	if [ "$scheduleIndex" -ge "${#retrySchedule[@]}" ]; then scheduleIndex=$((${#retrySchedule[@]} - 1)); fi
+	cooldownDays="${retrySchedule[$scheduleIndex]}"
 	now=$(date +%s)
-	cooldownSeconds=$((failedDownloadRetryDays * 86400))
+	cooldownSeconds=$((cooldownDays * 86400))
 	if [ "$markerTime" -gt 0 ] && [ $((now - markerTime)) -lt "$cooldownSeconds" ]; then
 		remainingHours=$(((cooldownSeconds - (now - markerTime) + 3599) / 3600))
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Previously failed $provider download ($albumId); retry eligible in approximately $remainingHours hours..."
 		return 0
 	fi
 
-	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Failed $provider download cooldown expired ($albumId); retrying..."
-	rm -f "$marker"
+	log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Failed $provider download cooldown expired after $cooldownDays days ($albumId); retrying..."
 	return 1
 }
 
@@ -72,9 +85,13 @@ RecordFailedDownload () {
 	local attempts="$3"
 	local reason="$4"
 	local marker="/config/extended/logs/downloaded/failed/$provider/$albumId"
+	local failureNumber
 
-	printf 'timestamp=%s\nprovider=%s\nattempts=%s\nreason=%s\n' \
-		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$provider" "$attempts" "$reason" > "$marker"
+	failureNumber=$(sed -n 's/^failures=//p' "$marker" 2>/dev/null | head -n1)
+	[[ "$failureNumber" =~ ^[1-9][0-9]*$ ]] || failureNumber=0
+	failureNumber=$((failureNumber + 1))
+	printf 'timestamp=%s\nprovider=%s\nattempts=%s\nfailures=%s\nreason=%s\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$provider" "$attempts" "$failureNumber" "$reason" > "$marker"
 	chmod 666 "$marker"
 }
 
@@ -298,7 +315,7 @@ Configuration () {
 	fi
 
  	log "Failed Download Attempt Threshold: $failedDownloadAttemptThreshold"
-	log "Failed Download Retry Cooldown: $failedDownloadRetryDays days"
+	log "Failed Download Retry Schedule: $failedDownloadRetryDays days (last value repeats)"
 	log "Deezer Detail Lookup Limit: $deezerDetailLookupLimit"
 	
 }
