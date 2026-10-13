@@ -289,7 +289,7 @@ class Worker:
         foreground = self.db.execute("SELECT count(*) FROM jobs WHERE id!=? AND state IN ('searching','enqueueing','downloading','downloaded','publishing','handoff','importing','failure_cleanup')",(ident,)).fetchone()[0]
         background = self.db.execute("SELECT count(*) FROM background_batches").fetchone()[0]
         retained = sum(bool(json.loads(row[0]).get("batch")) for row in self.db.execute("SELECT data FROM jobs WHERE id!=? AND state IN ('cleanup','review')",(ident,)))
-        return foreground == 0 and background+retained < self.max_batches
+        return foreground+background+retained < self.max_batches
 
     def cancel_client_batch(self,data):
         if getattr(self.slsk,"client","slskd") != "nicotine":
@@ -844,8 +844,7 @@ class Worker:
         rows.sort(key=lambda row: (row["state"] == "waiting",
                                   row["id"] not in priority_markers,
                                   row["first_seen"], row["id"]))
-        searches = 0
-        active = self.db.execute("SELECT count(*) FROM jobs WHERE state IN ('searching','enqueueing','downloading','downloaded','importing','handoff','publishing','failure_cleanup')").fetchone()[0]
+        import_busy = bool(self.db.execute("SELECT 1 FROM jobs WHERE state IN ('downloaded','publishing','handoff','importing','failure_cleanup') LIMIT 1").fetchone())
         for row in rows:
             ident, state, data = row["id"], row["state"], json.loads(row["data"])
             target = targets.get(ident)
@@ -874,12 +873,10 @@ class Worker:
                 continue
             try:
                 if state == "waiting":
-                    if searches >= 1 or active >= 1 or not self.batch_room(ident) or not self.ready(row, target):
+                    if import_busy or not self.batch_room(ident) or not self.ready(row, target):
                         with self.db:
                             self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
                         continue
-                    searches += 1
-                    active += 1
                     data = {"search": str(uuid.uuid4())}
                     if self.audio_policy is not None:
                         data["audioPolicy"] = self.audio_policy.config

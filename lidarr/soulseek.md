@@ -152,10 +152,12 @@ become the import candidate before expiry. Completed copies still need native
 Lidarr acceptance; completion alone never cancels alternatives. Once library
 files are verified, redundant background copies are cancelled and cleaned.
 
-`soulseekMaxBatches` defaults to **3 outstanding batches per app**, including
-foreground and background copies. At the cap, additional candidates wait.
-This limits album batches, not individual track files, and is not an attempts
-per day limit. State, candidate identity, and offline timestamps survive restarts.
+`soulseekMaxBatches` defaults to **3 concurrent searches/download batches per
+app** and accepts values from 1 through 10. It includes foreground searches,
+active downloads, retained review batches, and offline background copies. At
+the cap, additional candidates wait. This limits album batches, not individual
+track files, and is not an attempts-per-day limit. State, candidate identity,
+and offline timestamps survive restarts.
 
 QueueCleaner skips Soulseek-owned handoffs. Explicit failures cancel only the
 recorded batch before clearing its client rows and deleting owned files. The
