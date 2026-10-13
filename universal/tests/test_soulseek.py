@@ -453,8 +453,18 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len([p for p, _ in self.slsk.posts if p.endswith("searches")]), 3)
 
+    def test_foreground_limit_is_independent_from_background_limit(self):
+        self.worker.max_foreground_batches = 2
+        self.worker.max_batches = 3
+        batch = str(soulseek.uuid.uuid4())
+        with self.worker.db:
+            self.worker.db.execute("INSERT INTO background_batches VALUES(?,?,?,?)", (batch, 99, '{}', '{}'))
+        self.arr.movies = [{**self.arr.movies[0], "id": number} for number in range(1, 10)]
+        self.tick()
+        self.assertEqual(len(self.slsk.searches), 2)
+
     def test_slow_queued_transfer_holds_slot_until_finished(self):
-        self.worker.max_batches = 1
+        self.worker.max_foreground_batches = 1
         self.reach_batch()
         self.arr.movies = [{**self.arr.movies[0], "id": number} for number in range(1, 10)]
         for _ in range(3):

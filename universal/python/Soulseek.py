@@ -219,11 +219,12 @@ def import_payload(app, target, decisions, folder):
 
 
 class Worker:
-    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=30, notfound_days=90, offline_delay=900, offline_grace=86400, max_batches=3, search_retry_days=7):
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=30, notfound_days=90, offline_delay=900, offline_grace=86400, max_batches=3, max_foreground_batches=None, search_retry_days=7):
         self.failure_search_seconds = max(0,int(search_retry_days))*86400
         self.offline_delay = max(0,int(offline_delay))
         self.offline_grace = max(self.offline_delay,int(offline_grace))
         self.max_batches = max(1,min(10,int(max_batches)))
+        self.max_foreground_batches = max(1,min(10,int(max_foreground_batches if max_foreground_batches is not None else max_batches)))
         self.retry_seconds = max(0, int(retry_days))*86400
         self.notfound_seconds = max(0, int(notfound_days))*86400
         self.audio_policy = (audio_policy or AudioPolicy()) if app == "lidarr" else None
@@ -289,7 +290,7 @@ class Worker:
         foreground = self.db.execute("SELECT count(*) FROM jobs WHERE id!=? AND state IN ('searching','enqueueing','downloading','downloaded','publishing','handoff','importing','failure_cleanup')",(ident,)).fetchone()[0]
         background = self.db.execute("SELECT count(*) FROM background_batches").fetchone()[0]
         retained = sum(bool(json.loads(row[0]).get("batch")) for row in self.db.execute("SELECT data FROM jobs WHERE id!=? AND state IN ('cleanup','review')",(ident,)))
-        return foreground+background+retained < self.max_batches
+        return foreground < self.max_foreground_batches and background+retained < self.max_batches
 
     def cancel_client_batch(self,data):
         if getattr(self.slsk,"client","slskd") != "nicotine":
@@ -1060,7 +1061,7 @@ def main():
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
                         os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true",
                         retry_days=os.environ.get("SOULSEEK_FAILED_RETRY_DAYS","30"), search_retry_days=os.environ.get("SOULSEEK_FAILED_SEARCH_DAYS","7"),
-                        offline_delay=os.environ.get("SOULSEEK_OFFLINE_DELAY","900"), offline_grace=os.environ.get("SOULSEEK_OFFLINE_GRACE","86400"), max_batches=os.environ.get("SOULSEEK_MAX_BATCHES","3"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
+                        offline_delay=os.environ.get("SOULSEEK_OFFLINE_DELAY","900"), offline_grace=os.environ.get("SOULSEEK_OFFLINE_GRACE","86400"), max_batches=os.environ.get("SOULSEEK_MAX_BATCHES","3"), max_foreground_batches=os.environ.get("SOULSEEK_MAX_FOREGROUND_BATCHES"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
                         audio_policy=AudioPolicy(os.environ.get("SOULSEEK_AUDIO_FORMAT", "native"), os.environ.get("SOULSEEK_AUDIO_BITRATE", "master"), os.environ.get("SOULSEEK_REQUIRE_QUALITY") == "true") if app == "lidarr" else None,
                         imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None)
         try:
