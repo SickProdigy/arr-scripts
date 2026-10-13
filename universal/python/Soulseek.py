@@ -25,6 +25,14 @@ import uuid
 import xml.etree.ElementTree as ET
 
 
+DEBUG = os.environ.get("SOULSEEK_LOG_LEVEL", "info").strip().lower() == "debug"
+
+
+def debug(message):
+    if DEBUG:
+        print(message, flush=True)
+
+
 def AudioPolicy(*args, **kwargs):
     """Load the Lidarr-only audio helper when music processing needs it."""
     import sys
@@ -269,6 +277,7 @@ class Worker:
             next_data = {k:data[k] for k in ("search","audioPolicy","attempted") if k in data}
             next_data.update(candidate, candidates=candidates, batch=str(uuid.uuid4()))
             next_data["destination"] = next_data["batch"]
+            debug(f"Soulseek {self.app}: item {ident}: selected candidate with {len(candidate['files'])} files; {len(candidates)} alternates remain")
             self.save(ident, "enqueueing", next_data)
             return
         if self.db.execute("SELECT 1 FROM background_batches WHERE id=?",(ident,)).fetchone():
@@ -875,6 +884,7 @@ class Worker:
                     if self.audio_policy is not None:
                         data["audioPolicy"] = self.audio_policy.config
                     self.save(ident, "searching", data, 30)
+                    print(f"Soulseek {self.app}: item {ident}: search submitted :: {target['query']}", flush=True)
                     self.slsk.call("api/v0/searches", {"id": data["search"], "searchText": target["query"], "searchTimeout": 15000, "responseLimit": 100, "fileLimit": 10000, "filterResponses": True})
                 elif state == "candidate_wait":
                     if self.batch_room(ident):
@@ -892,6 +902,7 @@ class Worker:
                     if not result.get("isComplete"):
                         continue
                     choices = choose_files(target, result.get("responses", []), AudioPolicy(**data.get("audioPolicy", self.audio_policy.config)) if self.app == "lidarr" else None, all_candidates=True)
+                    debug(f"Soulseek {self.app}: item {ident}: search completed with {len(result.get('responses', []))} peer responses and {len(choices)} eligible candidates")
                     data["candidates"] = [{"username":peer["username"], "files":[{"filename":f["filename"],"size":f["size"]} for f in files]} for peer,files in choices]
                     self.next_candidate(ident,data)
                     continue

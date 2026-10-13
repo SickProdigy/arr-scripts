@@ -28,7 +28,25 @@ export SOULSEEK_SOURCES="${dlClientSource:-}"
 export SOULSEEK_AUDIO_FORMAT="${audioFormat:-native}"
 export SOULSEEK_AUDIO_BITRATE="${audioBitrate:-master}"
 export SOULSEEK_REQUIRE_QUALITY="${requireQuality:-false}"
+export SOULSEEK_LOG_LEVEL="${soulseekLogLevel:-info}"
 export SOULSEEK_AUDIO_ENABLED="${enableAudio:-false}"
 export SOULSEEK_ARR_URL="${arrUrl:-}"
 export SOULSEEK_ARR_API_KEY="${arrApiKey:-}"
-exec python3 "${ARR_SOULSEEK_WORKER:-/config/extended/python/Soulseek.py}" "$@"
+worker="${ARR_SOULSEEK_WORKER:-/config/extended/python/Soulseek.py}"
+if [[ " ${*:-} " == *" --diagnose "* ]]; then
+    exec python3 "$worker" "$@"
+fi
+logDir="${SOULSEEK_CONFIG_DIR}/logs"
+mkdir -p "$logDir"
+logFile="$logDir/Soulseek.log"
+logMaxBytes=$((5 * 1024 * 1024))
+if [[ -f "$logFile" ]] && (( $(stat -c %s "$logFile") >= logMaxBytes )); then
+    rm -f "$logFile.2"
+    [[ ! -f "$logFile.1" ]] || mv "$logFile.1" "$logFile.2"
+    mv "$logFile" "$logFile.1"
+fi
+set +e
+python3 "$worker" "$@" 2>&1 | tee -a "$logFile"
+status=${PIPESTATUS[0]}
+set -e
+exit "$status"
