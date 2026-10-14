@@ -63,7 +63,7 @@ if [ "$configureCustomScripts" == "true" ] || [ -z "$configureCustomScripts" ]; 
 	fi
 	plexNotificationId=$(echo "$notificationData" | jq -r '.[] | select(.name=="PlexNotify.bash") | .id' | head -n 1)
 	ratingsNotificationIds=$(echo "$notificationData" | jq -r '.[] | select(.name=="Ratings.bash") | .id')
-	if [ "${enableRatings:-false}" != "true" ]; then
+	if [ "${enableRatings:-false}" != "true" ] && [ "${enableMusicBrainzHelper:-false}" != "true" ]; then
 		for ratingsNotificationId in $ratingsNotificationIds; do
 			curl -s "$arrUrl/api/v1/notification/$ratingsNotificationId" -X DELETE -H "X-Api-Key: ${arrApiKey}" >/dev/null
 		done

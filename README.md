@@ -7,43 +7,22 @@ downloads, processing, imports, and library maintenance. It builds on
 RandomNinjaAtk's scripts, previously packaged with the Extended containers,
 and continues their development here.
 
-The direction is to connect more of the download-to-library workflow: choose
-sources, process completed files, import them through Arr, and clean up after
-confirmed success. Optional services are configured in `extended.conf`, with
-background workers for clients that manage their own queues. Companion projects
-stay in their own repositories; this bundle connects their automation to Arr.
+Choose your application below for installation. Optional features are configured
+in its `extended.conf`.
 
 ## Applications
 
 | Application | Features and setup |
 | --- | --- |
-| [Lidarr](lidarr/readme.md) | Deezer/TIDAL downloads, Soulseek fallback, music tagging, ReplayGain, lyrics, MusicBrainz contributions, and Subsonic/Navidrome ratings |
-| [Sonarr](sonarr/readme.md) | TV automation, queue maintenance, extras, YouTube series downloads, and Soulseek fallback |
-| [Radarr](radarr/readme.md) | Movie automation, queue maintenance, extras, and Soulseek fallback |
+| [Lidarr](lidarr/readme.md) | Deezer/TIDAL downloads, Soulseek alternative, music tagging, ReplayGain, lyrics, MusicBrainz contributions, and Subsonic/Navidrome ratings |
+| [Sonarr](sonarr/readme.md) | TV automation, queue maintenance, extras, YouTube series downloads, and Soulseek alternative |
+| [Radarr](radarr/readme.md) | Movie automation, queue maintenance, extras, and Soulseek alternative |
 | [Readarr](readarr/readme.md) | Existing Readarr scripts and setup |
 | [SABnzbd](sabnzbd/readme.md) | Existing SABnzbd scripts and setup |
 
 Start with your application's README. Each folder contains its scripts,
 configuration, and installation instructions. Shared workers and common guides
-live in `universal/`.
-
-## Soulseek support
-
-Use slskd or your existing Nicotine+ session with the separate HTTP API plugin
-to fill monitored missing items. The worker tracks transfers, imports completed
-downloads through Arr, and removes its source files after verified success.
-Failed or uncertain imports remain available for troubleshooting.
-
-Setup belongs with each application:
-
-- [Lidarr: sources, fallback, and download paths](lidarr/soulseek.md)
-- [Sonarr: missing episodes and download paths](sonarr/soulseek.md)
-- [Radarr: missing movies and download paths](radarr/soulseek.md)
-
-These guides cover both clients, configuration, and shared mounts. Current
-matching is conservative: complete music releases, movie title/year, and
-standard numbered TV episodes. Live peer transfers and deployed Arr import
-acceptance still require validation.
+are documented in the [shared scripts README](universal/readme.md).
 
 ## Companion projects
 

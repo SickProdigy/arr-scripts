@@ -86,7 +86,7 @@ Test events queue nothing. Durable jobs retry failures separately from imports,
 and accepted votes are tracked per account to prevent repeated contributions.
 Changed tags queue new suggestions; removing a local genre does not withdraw an
 earlier MusicBrainz vote. Genre downvotes and deletions are not included.
-The integrated [ratings helper](ratings.md) additionally submits eligible
+The integrated [ratings helper](readme.md#ratings-automation) additionally submits eligible
 Navidrome ratings when this same MusicBrainz enable flag and credentials are set.
 
 Final embedded tags represent the user's selected genres. Beets can combine
@@ -98,5 +98,5 @@ exports preserve the original choices. It is not a complete library backup.
 Setup installs the versioned `musicbrainz-helper` package, just as it installs
 Beets. The Bash wrapper calls its installed `musicbrainz-genres` command. Python
 contribution logic is maintained in that project's `musicbrainz_helper/` folder,
-not copied into arr-scripts. See [helper dependency installation](helper-dependencies.md)
+not copied into arr-scripts. See [helper dependency installation](../CONTRIBUTING.md#lidarr-helper-releases)
 for package pins and release/deployment requirements.

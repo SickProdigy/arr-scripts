@@ -1,4 +1,5 @@
 #!/usr/bin/with-contenv bash
+export arrScriptsRawBase="${ARR_SCRIPTS_RAW_BASE:-https://raw.githubusercontent.com/SickProdigy/arr-scripts/main}"
 echo "************ install and update packages ************"
 apk add -U --update --no-cache \
   jq \
@@ -10,35 +11,35 @@ pip install --upgrade --no-cache-dir -U --break-system-packages yq
 
 mkdir -p /custom-services.d
 echo "Download AutoConfig service..."
-curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/readarr/AutoConfig.bash -o /custom-services.d/AutoConfig
+curl "${arrScriptsRawBase%/}/readarr/AutoConfig.bash" -o /custom-services.d/AutoConfig
 echo "Done"
 
 echo "Download QueueCleaner service..."
-curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/universal/services/QueueCleaner -o /custom-services.d/QueueCleaner
+curl "${arrScriptsRawBase%/}/universal/services/QueueCleaner" -o /custom-services.d/QueueCleaner
 echo "Done"
 
 mkdir -p /config/extended
 echo "Download Script Functions..."
-curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/universal/functions.bash -o /config/extended/functions
+curl "${arrScriptsRawBase%/}/universal/functions.bash" -o /config/extended/functions
 echo "Done"
 
 echo "Download PlexNotify script..."
-curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/readarr/PlexNotify.bash -o /config/extended/PlexNotify.bash 
+curl "${arrScriptsRawBase%/}/readarr/PlexNotify.bash" -o /config/extended/PlexNotify.bash
 echo "Done"
 
 echo "Download combine script..."
-curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/readarr/combine.bash -o /config/extended/combine.bash 
+curl "${arrScriptsRawBase%/}/readarr/combine.bash" -o /config/extended/combine.bash
 echo "Done"
 
 echo "Download AutoConfig config..."
-curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/readarr/AutoConfig.json -o /config/extended/AutoConfig.json
+curl "${arrScriptsRawBase%/}/readarr/AutoConfig.json" -o /config/extended/AutoConfig.json
 echo "Done"
 
 chmod 777 -R /config/extended
 
 if [ ! -f /config/extended.conf ]; then
 	echo "Download Extended config..."
-	curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/readarr/extended.conf -o /config/extended.conf
+	curl "${arrScriptsRawBase%/}/readarr/extended.conf" -o /config/extended.conf
 	chmod 777 /config/extended.conf
 	echo "Done"
 fi

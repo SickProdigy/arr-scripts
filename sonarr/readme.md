@@ -24,6 +24,25 @@ is available for public downloads.
 5. Optional: Customize the configuration by modifying the following file `/config/extended.conf`
 6. Restart the container
 
+### Optional Soulseek downloads
+
+To download missing episodes through Soulseek, run slskd or Nicotine+ with its
+[API plugin](../universal/readme.md#nicotine-plugin-settings). Share its completed-download
+folder with Sonarr at `/downloads/soulseek`, then add to `/config/extended.conf`:
+
+```bash
+enableSoulseek="true"
+soulseekClient="nicotine"
+soulseekUrl="http://nicotineplus:12339"
+soulseekApiKey="YOUR_API_KEY"
+soulseekDownloadPath="/downloads/soulseek"
+```
+
+For slskd, change the client to `slskd` and URL to `http://slskd:5030`, using its
+read/write API key. Keep both containers on the same network and restart Sonarr.
+
+See the [shared client setup](../universal/readme.md) for client installation and mount examples.
+
 ## Updating
 
 Updating is a bit more cumbersome. To update, do the following:
@@ -90,7 +109,3 @@ For more details, visit the [repository overview](../README.md)
 * [The Movie Database](https://www.themoviedb.org/)
 * [Recyclarr](https://github.com/recyclarr/recyclarr)
 * Icons made by [Freepik](https://www.freepik.com/) from [Flaticon](https://www.flaticon.com)
-
-## Optional Soulseek downloads
-
-See [Soulseek setup](soulseek.md) for slskd or Nicotine+, shared mounts, missing-episode fallback, and import cleanup.

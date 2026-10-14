@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.34"
+scriptVersion="1.4.35"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -51,6 +51,8 @@ uv pip install --system --upgrade --no-cache-dir --break-system-packages \
   pyacoustid \
   requests \
   colorama \
+  python-dotenv \
+  tqdm \
   python-telegram-bot \
   pylast \
   mutagen \

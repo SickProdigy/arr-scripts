@@ -1,4 +1,5 @@
 #!/usr/bin/with-contenv bash
+export arrScriptsRawBase="${ARR_SCRIPTS_RAW_BASE:-https://raw.githubusercontent.com/SickProdigy/arr-scripts/main}"
 RAHASHER_PATH="/usr/local/RALibretro"
 SKYSCRAPER_PATH="/usr/local/skysource"
 echo "************ install dependencies ************"
@@ -43,13 +44,13 @@ chmod -R 777 ${RAHASHER_PATH}
 
 mkdir -p /custom-services.d
 echo "Download Downloader service..."
-curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/ra-rom-downloader/Downloader.bash -o /custom-services.d/Downloader
+curl "${arrScriptsRawBase%/}/ra-rom-downloader/Downloader.bash" -o /custom-services.d/Downloader
 echo "Done"
 chmod 777 /custom-services.d/Downloader
 
 if [ ! -f /config/extended.conf ]; then
 	echo "Download Extended config..."
-	curl https://raw.githubusercontent.com/RandomNinjaAtk/arr-scripts/main/ra-rom-downloader/extended.conf -o /config/extended.conf
+	curl "${arrScriptsRawBase%/}/ra-rom-downloader/extended.conf" -o /config/extended.conf
 	chmod 777 /config/extended.conf
 	echo "Done"
 fi

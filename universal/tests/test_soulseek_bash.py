@@ -60,5 +60,34 @@ class WrapperTests(unittest.TestCase):
             self.assertNotIn("RandomNinjaAtk/arr-scripts", source)
 
 
+    def test_legacy_bootstraps_use_current_sources_and_report_download_failure(self):
+        for app in ("readarr", "ra-rom-downloader"):
+            with self.subTest(app=app), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                trace = root / "trace"
+                def shell_path(path):
+                    value = Path(path).as_posix()
+                    return f"/{value[0].lower()}{value[2:]}" if os.name == "nt" and value[1:2] == ":" else value
+                environment = {**os.environ, "TRACE": shell_path(trace)}
+                # A shell function shadows the real executable even if Bash resets PATH.
+                wrapper = '\n'.join((
+                    'curl() {',
+                    ' printf "%s\\n" "$@" > "$TRACE"',
+                    ' if [ "${FAKE_EXIT:-0}" != "0" ]; then return "$FAKE_EXIT"; fi',
+                    ' printf "exit 0\\n"',
+                    '}',
+                    'export -f curl',
+                    '[ "$(type -t curl)" = function ] || exit 99',
+                    'source "$1"',
+                ))
+                for base, status in (("https://raw.githubusercontent.com/SickProdigy/arr-scripts/main", "0"),
+                                     ("https://example.test/source", "0"), ("https://example.test/source", "22")):
+                    environment.update(ARR_SCRIPTS_RAW_BASE=base, FAKE_EXIT=status)
+                    result = subprocess.run([BASH, "-c", wrapper, "--", (ROOT/app/"scripts_init.bash").as_posix()], env=environment, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, int(status), result.stderr)
+                    self.assertTrue(trace.exists(), repr((result.stdout, result.stderr)))
+                    self.assertIn(base + "/" + app + "/setup.bash", trace.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

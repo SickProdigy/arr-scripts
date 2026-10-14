@@ -36,7 +36,67 @@ These are the Deezer/TIDAL working and blackhole import folders. Existing
 explicit paths remain valid; updating does not relocate files or overwrite your
 configuration. If you change `importPath`, keep Lidarr's blackhole download
 client folder aligned with it. Soulseek uses `/downloads/soulseek` as described
-in the [Soulseek guide](soulseek.md).
+in the [Soulseek setup below](#optional-soulseek-downloads).
+
+### Optional Soulseek downloads
+
+To download missing albums through Soulseek, run slskd or Nicotine+ with its
+[API plugin](../universal/readme.md#nicotine-plugin-settings). Share its completed-download
+folder with Lidarr at `/downloads/soulseek`, then add to `/config/extended.conf`:
+
+```bash
+enableSoulseek="true"
+soulseekClient="nicotine"
+soulseekUrl="http://nicotineplus:12339"
+soulseekApiKey="YOUR_API_KEY"
+soulseekDownloadPath="/downloads/soulseek"
+dlClientSource="all" # Deezer/TIDAL with Soulseek fallback
+```
+
+For slskd, change the client to `slskd` and URL to `http://slskd:5030`, using its
+read/write API key. Keep both containers on the same network and restart Lidarr.
+Lidarr's Usenet Blackhole client must watch `importPath`; use `dlClientSource="soulseek"` for Soulseek only.
+
+See the [shared client setup](../universal/readme.md) for client installation and mount examples.
+
+### Ratings automation
+
+SonicRatings fills unrated imported songs in Navidrome/Subsonic. Both rating tools
+are installed automatically. Add these settings to `/config/extended.conf`:
+
+```bash
+enableRatings="true"
+subsonicUrl="http://navidrome:4533"
+subsonicUsername="your_subsonic_user"
+subsonicPassword="your_subsonic_password"
+ratingsProvider="musicbrainz"
+```
+
+For Last.fm, use `ratingsProvider="lastfm"` and set `lastfmApiKey`. Other supported
+providers are `spotify` (`spotifyClientId`, `spotifyClientSecret`), `tidal`
+(`tidalClientId`, `tidalClientSecret`), and `discogs` (optional `discogsToken`;
+`discogsInheritAlbumRating="true"` allows album ratings to be applied to tracks).
+
+To contribute eligible ratings and genres to MusicBrainz too, enable the
+MusicBrainz helper and set your username and application token:
+
+```bash
+enableMusicBrainzHelper="true"
+musicBrainzUsername="your_musicbrainz_user"
+musicBrainzToken="your_musicbrainz_application_token"
+```
+
+Create the token under MusicBrainz **Account > Applications**. Either tool can
+be enabled independently. Restart Lidarr after configuring.
+
+Preview a backfill of your existing library, then apply it:
+
+```bash
+bash /config/extended/Ratings.bash --library --preview
+bash /config/extended/Ratings.bash --library
+```
+
+The background service keeps processing new imports while a manual preview runs.
 
 ## Updating
 
@@ -202,21 +262,8 @@ from imported Tidal/Deezer files or Beets to release groups, release editions an
 recordings. Set `enableMusicBrainzHelper="true"` and your MusicBrainz credentials
 in `extended.conf`; the normal installer includes the helper and background worker.
 
-## Ratings automation
-
-Works with any Subsonic/Navidrome server supporting the browsing, personal-rating
-and authentication APIs described in the setup guide.
-
-See [integrated ratings](ratings.md) to rate new imports after Beets and synchronize
-later Subsonic/Navidrome rating changes to MusicBrainz. Setup installs pinned SonicRatings engine
-and musicbrainz-helper packages; arr-scripts owns their automation hooks. Supply a Last.fm key for SonicRatings
-scoring, or leave it empty to use MusicBrainz community ratings locally.
 ## Optional background lyrics
 
 Successful metadata tagging queues lyrics locally. The independent worker calls
 LRCMux directly, embeds results, and preserves existing lyrics without delaying
 downloads/imports. See [configuration and behavior](lyrics.md).
-
-## Optional Soulseek downloads
-
-See [Soulseek setup](soulseek.md) for slskd or Nicotine+, shared mounts, provider selection, and import cleanup.
