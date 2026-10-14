@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Install versioned project dependencies, following the Beets installation model.
 set -euo pipefail
-repositoryBase="${ARR_HELPER_REPOSITORY_BASE:-https://github.com/SickProdigy}"
-# Publish both pinned releases before deployment; never install moving branches.
-musicbrainzSource="${ARR_MUSICBRAINZ_HELPER_SOURCE:-git+${repositoryBase%/}/musicbrainz-helper.git@v0.4.0}"
-sonicratingsSource="${ARR_SONICRATINGS_SOURCE:-git+${repositoryBase%/}/SonicRatings.git@v1.4.0}"
+# Install published versions; explicit sources support local package validation.
+musicbrainzSource="${ARR_MUSICBRAINZ_HELPER_SOURCE:-musicbrainz-helper==0.4.0}"
+sonicratingsSource="${ARR_SONICRATINGS_SOURCE:-sonicratings==1.4.0}"
 # All package dependencies are installed explicitly by Lidarr setup.
-# Install the independent helper explicitly; do not resolve its name on PyPI.
 uv pip install --system --break-system-packages --no-deps "$musicbrainzSource" "$sonicratingsSource"
 python3 - <<'PY'
 from importlib.metadata import version

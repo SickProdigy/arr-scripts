@@ -6,18 +6,18 @@ Lidarr installs both independent packages alongside tools such as Beets:
 
 | Package | Repository | Release pin | Responsibility |
 | --- | --- | --- | --- |
-| sonicratings 1.4.0 | SonicRatings | `v1.4.0` | Generate Subsonic ratings, queue imports, and retain rating provenance |
-| musicbrainz-helper 0.4.0 | musicbrainz-helper | `v0.4.0` | MusicBrainz rating/genre contributions and submission history |
+| sonicratings 1.4.0 | SonicRatings | `sonicratings==1.4.0` | Generate Subsonic ratings, queue imports, and retain rating provenance |
+| musicbrainz-helper 0.4.0 | musicbrainz-helper | `musicbrainz-helper==0.4.0` | MusicBrainz rating/genre contributions and submission history |
 
-`InstallHelpers.bash` installs pinned Git releases through `uv pip` and verifies versions and commands. Lidarr setup installs their Requests, Mutagen, Colorama, python-dotenv, and tqdm dependencies. Neither package imports or installs the other; arr-scripts coordinates their commands and passes optional provenance paths through environments.
+`InstallHelpers.bash` installs pinned PyPI packages through `uv pip` and verifies versions and commands. Lidarr setup installs their Requests, Mutagen, Colorama, python-dotenv, and tqdm dependencies. Neither package imports or installs the other; arr-scripts coordinates their commands and passes optional provenance paths through environments.
 
 `MusicBrainzGenres.bash` invokes `musicbrainz-genres`. `Ratings.bash` invokes `sonicratings` and `musicbrainz-ratings` according to their enable settings. Services, callbacks, and credentials belong in arr-scripts; Python behavior stays in the respective packages. Both packages use the same code for manual and installed commands.
 
 ## Release and deploy
 
-Publish **SonicRatings `v1.4.0`** and **musicbrainz-helper `v0.4.0`** before deploying this installer. Missing tags or version mismatches fail setup instead of selecting a moving branch. Publish arr-scripts to its Gitea origin, then use the normal container restart/update workflow. Setup version `1.4.35` refreshes dependencies in existing installations. Existing configuration is preserved; add the desired new settings from [ratings setup](lidarr/readme.md#ratings-automation).
+Publish the pinned package versions to **PyPI** before deploying this installer. Missing releases or version mismatches fail setup. Publish arr-scripts to its Gitea origin, then use the normal container restart/update workflow. Setup version `1.4.35` refreshes dependencies in existing installations. Existing configuration is preserved; add the desired new settings from [ratings setup](lidarr/readme.md#ratings-automation).
 
-Sources default to public GitHub repositories under `SickProdigy`, regardless of where arr-scripts itself was downloaded. `ARR_HELPER_REPOSITORY_BASE` overrides that base. For package validation, `ARR_SONICRATINGS_SOURCE` and `ARR_MUSICBRAINZ_HELPER_SOURCE` accept local package directories or reviewed wheels accessible inside the container. Version checks still apply. The obsolete `ARR_SONICRATINGS_ENGINE_SOURCE` override is unused.
+For package validation, `ARR_SONICRATINGS_SOURCE` and `ARR_MUSICBRAINZ_HELPER_SOURCE` accept local package directories or reviewed wheels accessible inside the container. Version checks still apply. The obsolete `ARR_HELPER_REPOSITORY_BASE` and `ARR_SONICRATINGS_ENGINE_SOURCE` overrides are unused.
 
 ## Ratings worker behavior
 

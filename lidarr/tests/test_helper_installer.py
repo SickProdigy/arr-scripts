@@ -28,11 +28,12 @@ class HelperInstallerTests(unittest.TestCase):
                                     env=environment, capture_output=True, text=True)
             return result.returncode, trace.read_text().splitlines() if trace.exists() else []
 
-    def test_dependencies_default_to_public_github_even_when_arr_uses_another_forge(self):
+    def test_dependencies_default_to_pinned_pypi_packages(self):
         code, trace = self.run_installer()
         self.assertEqual(code, 0)
-        self.assertIn("git+https://github.com/SickProdigy/musicbrainz-helper.git@v0.4.0", trace)
-        self.assertIn("git+https://github.com/SickProdigy/SonicRatings.git@v1.4.0", trace)
+        self.assertIn("musicbrainz-helper==0.4.0", trace)
+        self.assertIn("sonicratings==1.4.0", trace)
+        self.assertFalse(any("git+" in line for line in trace))
         self.assertFalse(any("sonicratings-engine" in line for line in trace))
         self.assertIn("--no-deps", trace)
         self.assertIn("--system", trace)
@@ -40,9 +41,9 @@ class HelperInstallerTests(unittest.TestCase):
     def test_arr_source_owner_does_not_redirect_helper_dependencies(self):
         code, trace = self.run_installer(raw="https://raw.githubusercontent.com/owner/arr-scripts/main")
         self.assertEqual(code, 0)
-        self.assertIn("git+https://github.com/SickProdigy/musicbrainz-helper.git@v0.4.0", trace)
+        self.assertIn("musicbrainz-helper==0.4.0", trace)
 
-    def test_local_sources_and_custom_base_are_supported(self):
+    def test_explicit_local_sources_are_supported(self):
         code, trace = self.run_installer(raw="https://example.test/unusual", overrides={
             "ARR_HELPER_REPOSITORY_BASE": "https://forge.example.test/owner",
             "ARR_SONICRATINGS_ENGINE_SOURCE": "/sources/sonicratings engine",
@@ -53,10 +54,12 @@ class HelperInstallerTests(unittest.TestCase):
         self.assertIn("/sources/musicbrainz helper", trace)
         self.assertIn("/sources/sonicratings", trace)
 
-    def test_custom_repository_base_is_honored_and_failed_install_fails_closed(self):
+    def test_obsolete_repository_base_is_ignored_and_failed_install_fails_closed(self):
         code, trace = self.run_installer(overrides={"ARR_HELPER_REPOSITORY_BASE": "https://forge.example.test/owner"})
         self.assertEqual(code, 0)
-        self.assertIn("git+https://forge.example.test/owner/musicbrainz-helper.git@v0.4.0", trace)
+        self.assertIn("musicbrainz-helper==0.4.0", trace)
+        self.assertIn("sonicratings==1.4.0", trace)
+        self.assertFalse(any("forge.example.test" in line for line in trace))
         code, trace = self.run_installer(fail=True)
         self.assertEqual(code, 1)
         self.assertFalse(any(line.endswith("/python3") for line in trace))
