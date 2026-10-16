@@ -343,7 +343,10 @@ transfers. It retains all ownership/path checks and will not discard uncertain
 imports or albums handed to Lidarr's Activity queue.
 
 Partial batches, ambiguous imports and uncertain import replies enter `review`
-state and are logged by item ID. Nicotine failures use coordinated cancellation
+state and are logged by item ID. Cleanup failures enter review after three attempts;
+completed or untracked handoffs enter review after one hour without resolution.
+Files are preserved, and unrelated searches can continue within the batch limits.
+Nicotine failures use coordinated cancellation
 and candidate retry; unsupported client cleanup retains files for review. After fixing
 the cause, use `ARR_SOULSEEK_APP=lidarr bash /config/extended/Soulseek.bash --retry 123`
 (substitute the app and item ID). A retried batch is checked again before import;

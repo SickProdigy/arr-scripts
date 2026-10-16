@@ -263,6 +263,26 @@ class Worker:
             self.db.execute("INSERT OR REPLACE INTO failed_candidates VALUES(?,?,?,?)", (ident,key,self.clock()+self.retry_seconds,reason))
         self.save(ident, "failure_cleanup", {**data,"reason":reason,"attempted":True})
 
+    def retain_for_review(self, ident, data, reason):
+        """Keep uncertain files and exclude only this peer/folder candidate."""
+        if data.get("username") and data.get("files"):
+            key = self.candidate_key(data["username"], data["files"])
+            with self.db:
+                self.db.execute("INSERT OR REPLACE INTO failed_candidates VALUES(?,?,?,?)",
+                                (ident,key,self.clock()+self.retry_seconds,reason))
+        self.save(ident, "review", {**data,"reason":reason})
+        print(f"Soulseek {self.app}: item {ident}: files retained for review; {reason}", flush=True)
+
+    def defer_cleanup(self, ident, state, data, error):
+        attempts = data.get("cleanupAttempts", 0) + 1
+        detail = str(error) if isinstance(error, (ApiError, ValueError)) and str(error) else type(error).__name__
+        data = {**data, "cleanupAttempts": attempts, "cleanupError": detail}
+        if attempts >= 3:
+            self.retain_for_review(ident, data, "cleanup failed three times; inspect retained files")
+        else:
+            print(f"Soulseek {self.app}: item {ident}: cleanup {detail}; retry {attempts}/3", flush=True)
+            self.save(ident, state, data, 300)
+
     def next_candidate(self, ident, data):
         data = dict(data)
         data["attempted"] = data.get("attempted", False) or "reason" in data
@@ -686,6 +706,7 @@ class Worker:
         data["importTarget"] = target
         # Persist the handoff before asking Arr to refresh. The worker must not
         # issue a competing direct import or republish a removed queue item.
+        data.setdefault("handoffSince", self.clock())
         self.save(target["id"], "handoff", data, 60)
         # The published folder is now the sole completed-download copy, just as
         # for streaming providers. Never remove an original without its copy.
@@ -863,15 +884,14 @@ class Worker:
         rows.sort(key=lambda row: (row["state"] == "waiting",
                                   row["id"] not in priority_markers,
                                   row["first_seen"], row["id"]))
-        import_busy = bool(self.db.execute("SELECT 1 FROM jobs WHERE state IN ('downloaded','publishing','handoff','importing','failure_cleanup') LIMIT 1").fetchone())
         for row in rows:
             ident, state, data = row["id"], row["state"], json.loads(row["data"])
             target = targets.get(ident)
             if state == "failure_cleanup" and target is not None:
                 try:
                     self.failed_cleanup(ident,data,queue)
-                except (ApiError,ValueError,KeyError,TypeError,OSError):
-                    self.save(ident,"failure_cleanup",data,300)
+                except (ApiError,ValueError,KeyError,TypeError,OSError) as error:
+                    self.defer_cleanup(ident,"failure_cleanup",data,error)
                 continue
             if target is None:
                 if state in ("importing", "cleanup", "handoff", "publishing", "failure_cleanup"):
@@ -884,9 +904,7 @@ class Worker:
                         else:
                             self.cleanup_import(original, data)
                     except (ApiError, ValueError, KeyError, TypeError, OSError) as error:
-                        detail = str(error) if isinstance(error, (ApiError, ValueError)) and str(error) else type(error).__name__
-                        print(f"Soulseek {self.app}: item {ident}: cleanup {detail}; retained", flush=True)
-                        self.save(ident, "cleanup", data, 300)
+                        self.defer_cleanup(ident, "cleanup", data, error)
                         continue
                 if state != "done":
                     self.save(ident, "done", data)
@@ -895,6 +913,7 @@ class Worker:
                 continue
             try:
                 if state == "waiting":
+                    import_busy = bool(self.db.execute("SELECT 1 FROM jobs WHERE state IN ('downloaded','publishing','handoff','importing') LIMIT 1").fetchone())
                     if import_busy or not self.batch_room(ident) or not self.ready(row, target):
                         with self.db:
                             self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
@@ -976,13 +995,19 @@ class Worker:
                     data["command"] = result["id"]
                     self.save(ident, "importing", data, 60)
                 elif state == "handoff":
+                    data.setdefault("handoffSince", now)
                     owned = [entry for entry in queue if entry.get("outputPath") == data["handoff"]]
                     if owned:
                         if any(entry.get("status") == "completed" and entry.get("trackedDownloadStatus") == "warning" for entry in owned):
                             self.fail_candidate(ident,data,"Lidarr rejected completed import")
-                        continue
-                    if not Path(data["handoff"]).exists():
+                            continue
+                    elif not Path(data["handoff"]).exists():
                         self.fail_candidate(ident,data,"handoff removed before import")
+                        continue
+                    if now-data["handoffSince"] >= 3600 and (not owned or all(entry.get("status") == "completed" for entry in owned)):
+                        self.retain_for_review(ident,data,"handoff unresolved for one hour; inspect retained files")
+                    else:
+                        self.save(ident,"handoff",data,60)
                     # It may not be visible until the next native queue refresh.
                 elif state == "importing":
                     if "command" not in data:
