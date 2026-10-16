@@ -1,4 +1,4 @@
-* text=auto
+* text=auto eol=lf
 *.sh text eol=lf
 # Scripts execute from shared Linux storage even when edited on Windows.
 *.bash text eol=lf
