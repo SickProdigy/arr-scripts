@@ -1,5 +1,5 @@
 plugins: musicbrainz chroma embedart lastgenre deezer mbsync
-art_filename: coverart
+art_filename: cover
 threaded: yes
 per_disc_numbering: yes
 id3v23: no

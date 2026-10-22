@@ -72,6 +72,19 @@ if [ "${REPLAYGAIN_MOCK_FAIL:-false}" = "true" ]; then
 	echo "mock scanner failure"
 	exit 42
 fi
+if [ "${REPLAYGAIN_MOCK_TAG:-false}" = "true" ]; then
+    python3 - "$@" <<'PY'
+import sys
+from mutagen.flac import FLAC
+for path in sys.argv[1:]:
+    if path.endswith('.flac'):
+        audio = FLAC(path)
+        for field, value in {'replaygain_track_gain': '-5 dB', 'replaygain_album_gain': '-5 dB',
+                             'replaygain_track_peak': '0.9', 'replaygain_album_peak': '0.9'}.items():
+            audio[field] = value
+        audio.save()
+PY
+fi
 echo "mock scanner success"
 exit 0
 EOF
@@ -83,11 +96,13 @@ EOF
 run_tagger () {
 	local root="$1"
 	shift
+	PATH="$root/bin:$PATH" \
 	EXTENDED_CONF="$root/config/extended.conf" \
 	FUNCTIONS_PATH="$root/config/functions" \
 	REPLAYGAIN_SCANNER="$root/bin/rsgain-mock" \
 	REPLAYGAIN_MOCK_LOG="$root/scanner.log" \
 	REPLAYGAIN_MOCK_FAIL="${REPLAYGAIN_MOCK_FAIL:-false}" \
+	REPLAYGAIN_MOCK_TAG="${REPLAYGAIN_MOCK_TAG:-false}" \
 	REPLAYGAIN_STATE_DIR="$root/state" \
 	REPLAYGAIN_MUSIC_ROOT="$root/music" \
 	lidarr_eventtype="${lidarr_eventtype:-}" \
@@ -272,6 +287,131 @@ test_backfill_groups_multidisc_album () {
 	passCount=$((passCount + 1))
 }
 
+write_repair_audit () {
+	python3 - "$1" <<'PY'
+import os
+import sys
+root = sys.argv[1]
+with open(os.path.join(root, 'audit.log'), 'w', encoding='utf8') as stream:
+    stream.write('UNTAGGED\t' + os.path.join(root, 'music/Artist/Album/01 First.flac') + '\n')
+    stream.write('COMPLETE\t' + os.path.join(root, 'music/Artist/Other/02 Other.mp3') + '\n')
+PY
+}
+
+test_repair_preview_only_selects_missing_album () {
+	local root
+	root="$(make_fixture repair_preview)"
+	mkdir -p "$root/music/Artist/Other"
+	touch "$root/music/Artist/Other/02 Other.mp3"
+	write_repair_audit "$root"
+	run_tagger "$root" --repair-audit "$root/audit.log" --dry-run
+	assert_contains "selected=1" "$root/output.log" "repair only selects missing-tag album"
+	assert_contains "REPAIR_PREVIEW" "$root/output.log" "repair preview lists album"
+	[ ! -f "$root/scanner.log" ] || { echo "FAIL: repair preview called scanner"; exit 1; }
+	passCount=$((passCount + 1))
+}
+
+test_repair_bypasses_stamp_and_detects_incomplete_tags () {
+	local root
+	root="$(make_fixture repair_stamp)"
+	run_tagger "$root" --path "$root/music/Artist/Album"
+	write_repair_audit "$root"
+	if run_tagger "$root" --repair-audit "$root/audit.log"; then
+		echo "FAIL: missing tags must fail repair despite scanner success"
+		exit 1
+	fi
+	assert_equals "2" "$(wc -l < "$root/scanner.log" | awk '{print $1}')" "repair bypasses a matching completion stamp"
+	assert_contains "failed=1" "$root/output.log" "incomplete repair is reported"
+	passCount=$((passCount + 1))
+}
+
+test_repair_verifies_tags_and_resumes_without_rescanning () {
+	local root
+	root="$(make_fixture repair_success)"
+	python3 - "$root/music/Artist/Album/01 First.flac" <<'PY'
+import struct
+import sys
+streaminfo = struct.pack('>HH', 4096, 4096) + b'\0'*6
+streaminfo += ((44100 << 44) | (1 << 41) | (15 << 36) | 44100).to_bytes(8, 'big') + b'\0'*16
+with open(sys.argv[1], 'wb') as stream:
+    stream.write(b'fLaC\x80\0\0\x22' + streaminfo)
+PY
+	write_repair_audit "$root"
+	REPLAYGAIN_MOCK_TAG=true run_tagger "$root" --repair-audit "$root/audit.log"
+	assert_contains "repaired=1" "$root/output.log" "repair verifies generated tags"
+	run_tagger "$root" --repair-audit "$root/audit.log"
+	assert_contains "already_complete=1" "$root/output.log" "resume checks current tags"
+	assert_equals "1" "$(wc -l < "$root/scanner.log" | awk '{print $1}')" "resume does not rescan a complete album"
+	REPLAYGAIN_MOCK_TAG=true run_tagger "$root" --repair-audit "$root/audit.log" --force
+	assert_equals "2" "$(wc -l < "$root/scanner.log" | awk '{print $1}')" "forced recovery rescans complete tags to avoid mixed album gain"
+	passCount=$((passCount + 1))
+}
+
+test_repair_rejects_paths_outside_root () {
+	local root
+	root="$(make_fixture repair_escape)"
+	python3 - "$root" <<'PY'
+import os
+import sys
+with open(os.path.join(sys.argv[1], 'audit.log'), 'w', encoding='utf8') as stream:
+    stream.write('UNTAGGED\t' + os.path.join(sys.argv[1], 'outside.flac') + '\n')
+PY
+	if run_tagger "$root" --repair-audit "$root/audit.log"; then
+		echo "FAIL: repair accepted audit outside root"
+		exit 1
+	fi
+	[ ! -f "$root/scanner.log" ] || { echo "FAIL: invalid audit called scanner"; exit 1; }
+	passCount=$((passCount + 1))
+}
+
+test_repair_flags_loose_files_without_scanning_artist_tree () {
+	local root
+	root="$(make_fixture repair_loose)"
+	touch "$root/music/Artist/Loose.flac"
+	python3 - "$root" <<'PY'
+import os
+import sys
+with open(os.path.join(sys.argv[1], 'audit.log'), 'w', encoding='utf8') as stream:
+    stream.write('UNTAGGED\t' + os.path.join(sys.argv[1], 'music/Artist/Loose.flac') + '\n')
+PY
+	run_tagger "$root" --repair-audit "$root/audit.log"
+	assert_contains "REPAIR_REVIEW" "$root/output.log" "loose files need album grouping review"
+	assert_contains "selected=0" "$root/output.log" "loose file does not select entire artist tree"
+	[ ! -f "$root/scanner.log" ] || { echo "FAIL: loose file scanned artist tree"; exit 1; }
+	passCount=$((passCount + 1))
+}
+
+test_audit_timing_and_maintenance_schedule () {
+    local root
+    root="$(make_fixture maintenance)"
+    run_tagger "$root" --maintenance
+    [ ! -f "$root/state/maintenance.last-attempt" ] || exit 1
+    run_tagger "$root" --audit
+    assert_contains "AUDIT START" "$root/output.log" "audit records start"
+    assert_contains "elapsed_seconds=" "$root/output.log" "audit records duration"
+    # Git Bash lacks flock; mock only lock acquisition, not scheduling or auditing.
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$root/bin/flock"
+    chmod +x "$root/bin/flock"
+    echo 'enableReplaygainMaintenance="true"' >> "$root/config/extended.conf"
+    REPLAYGAIN_MOCK_TAG=true run_tagger "$root" --maintenance
+    assert_contains "MAINTENANCE END" "$root/output.log" "maintenance completes"
+    assert_contains "AUDIT END" "$root/state/maintenance-audit.log" "maintenance saves timed audit"
+    run_tagger "$root" --maintenance
+    assert_not_contains "MAINTENANCE START" "$root/output.log" "schedule survives separate invocations"
+    echo 'replaygainMaintenanceDays="bad"' >> "$root/config/extended.conf"
+    if run_tagger "$root" --maintenance; then
+        echo "FAIL: invalid maintenance interval accepted"
+        exit 1
+    fi
+    passCount=$((passCount + 1))
+}
+
+test_audit_timing_and_maintenance_schedule
+test_repair_flags_loose_files_without_scanning_artist_tree
+test_repair_preview_only_selects_missing_album
+test_repair_bypasses_stamp_and_detects_incomplete_tags
+test_repair_verifies_tags_and_resumes_without_rescanning
+test_repair_rejects_paths_outside_root
 test_disabled_mode
 test_release_import_event
 test_configurable_target

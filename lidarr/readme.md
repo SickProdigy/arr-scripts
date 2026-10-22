@@ -174,6 +174,16 @@ To explicitly backfill `/music`, writing ReplayGain metadata tags:
 
 The audit reports complete track+album tag coverage, partial tags, untagged files, unreadable or unsupported files, and albums with mixed tag coverage.
 
+To repair missing or partial tags from a saved audit:
+
+```bash
+/config/extended/ReplayGainTagger.bash --repair-audit /config/logs/replaygain-audit.log --dry-run --path /music
+```
+
+Remove `--dry-run` to apply. This processes affected albums together, checks the resulting tags, and skips albums already complete when resumed. Loose files outside album folders are reported for review.
+
+
+Set `enableReplaygainMaintenance="true"` (default `false`) for automatic audit and repair every `replaygainMaintenanceDays` days (default `7`). ReplayGain tagging must also be enabled. The first run starts when enabled. Logs: `/config/logs/replaygain-maintenance.log`; latest audit: `/config/extended/replaygain/maintenance-audit.log`. Audits record start/end times and elapsed seconds.
 
 ## Features
 
@@ -267,3 +277,40 @@ in `extended.conf`; the normal installer includes the helper and background work
 Successful metadata tagging queues lyrics locally. The independent worker calls
 LRCMux directly, embeds results, and preserves existing lyrics without delaying
 downloads/imports. See [configuration and behavior](lyrics.md).
+
+## Optional library maintenance
+
+Set `enableLibraryMaintenance="true"` to use the pinned `navidrome-scripts` package
+(currently `0.14.0`), then restart for setup.
+The default is disabled. This adds weekly read-only unmapped-file reports and a
+worker for explicitly approved metadata jobs; optional full date audits stay off.
+See [review, import and approval commands](https://gitea.rcs1.top/sickprodigy/navidrome-scripts#optional-maintenance-with-arr-scripts).
+Logs are in `/config/logs/library-maintenance.log`, with reports and job status under
+`/config/extended/library-maintenance/`. Beets previews do not write tags; ReplayGain
+is verified and lyrics are queued separately. No files are automatically moved or deleted.
+
+Reviewed album renames use separate `--rename-plan ALBUM_ID OUTPUT`,
+`--rename-apply PLAN JOURNAL` and `--rename-verify PLAN JOURNAL` actions on
+`LibraryMaintenance.bash`. Set `libraryMaintenanceNavidromePrefix` to the path prefix
+shown by Navidrome (for example `Music-Library`) and use your configured Subsonic
+credentials. Complete a full Navidrome scan between tag repairs and renaming, then
+another full scan before verification. See the helper's [rename instructions](https://gitea.rcs1.top/sickprodigy/navidrome-scripts#album-folder-and-filename-repairs).
+To undo a rename, use `--rename-rollback-plan PLAN JOURNAL OUTPUT`, review the output,
+then `--rename-rollback PLAN JOURNAL`. After a new full Navidrome scan, run
+`--rename-rollback-verify PLAN JOURNAL` with the rollback plan and journal.
+
+Missing core metadata can be reviewed with `LibraryMaintenance.bash --tags-plan ALBUM_ID OUTPUT`,
+then explicitly applied with `--tags-apply PLAN JOURNAL` or restored with
+`--tags-rollback JOURNAL`. See the helper's [metadata instructions](https://gitea.rcs1.top/sickprodigy/navidrome-scripts#missing-metadata).
+
+## Existing album artwork
+
+
+Preview converting older album artwork names to `cover.jpg`:
+
+```bash
+docker exec -u 1000:1006 lidarr python3 /config/extended/python/ArtworkMigration.py --path /music
+```
+
+Add `--apply` to migrate. Only byte-identical artwork duplicates are removed;
+different images, artist artwork, NFO files and audio files are preserved.

@@ -1,5 +1,5 @@
 plugins: musicbrainz importadded
-art_filename: folder
+art_filename: cover
 threaded: yes
 per_disc_numbering: yes
 id3v23: no

@@ -170,12 +170,18 @@ class Queue:
         self.db.execute('CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value REAL NOT NULL)')
         self.db.commit()
 
-    def enqueue(self, directory, album_id='', read=metadata, has=embedded):
+    def enqueue(self, directory, album_id='', read=metadata, has=embedded, strict=False):
         directory = Path(directory).resolve()
         count = 0
+        scanned = 0
+        failures = 0
+        log('scanning for missing lyrics: '+str(directory))
         for path in directory.rglob('*'):
             if not path.is_file() or path.suffix.lower() not in EXTENSIONS or path.is_symlink() or not path.resolve().is_relative_to(directory):
                 continue
+            scanned += 1
+            if scanned % 100 == 0:
+                log(f'scan progress: checked {scanned} audio files; queued {count} so far')
             try:
                 if has(path):
                     continue
@@ -190,8 +196,11 @@ class Queue:
                     self.db.execute("INSERT INTO jobs(id,data,state,next_run) VALUES(?,?,'pending',?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,state=CASE WHEN jobs.state='done' THEN 'pending' ELSE jobs.state END", (ident, json.dumps(data), self.clock()+30))
                 count += 1
             except Exception as error:
+                failures += 1
                 log('local enqueue skipped '+type(error).__name__)
-        log(f'enqueued {count} tracks; imports continue')
+        log(f'enqueued {count} tracks after checking {scanned} audio files; imports continue')
+        if strict and failures:
+            raise RuntimeError(f'lyrics enqueue incomplete: {failures} file(s) failed')
         return count
 
     def save(self, ident, state, delay=0, attempt=False):
@@ -353,6 +362,7 @@ def lock(state):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--enqueue', type=Path)
+    parser.add_argument('--strict-enqueue', action='store_true', help='Return failure if any file could not be enqueued (maintenance workers)')
     parser.add_argument('--album-id', default='')
     parser.add_argument('--work', action='store_true')
     parser.add_argument('--retry', help='Reset one reviewed job ID after fixing its cause')
@@ -377,7 +387,7 @@ def main():
     elif args.enqueue:
         queue = Queue(state)
         try:
-            queue.enqueue(args.enqueue, args.album_id)
+            queue.enqueue(args.enqueue, args.album_id, strict=args.strict_enqueue)
         finally:
             queue.db.close()
     elif args.work:

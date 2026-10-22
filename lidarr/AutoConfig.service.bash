@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-scriptVersion="3.2"
+scriptVersion="3.3"
 scriptName="AutoConfig"
 
 ### Import Settings
@@ -21,17 +21,34 @@ verifyApiAccess
 
 if [ "$configureMediaManagement" == "true" ] || [ -z "$configureMediaManagement" ]; then
   log "Configuring Lidarr Media Management Settings"
-  postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/config/mediamanagement" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"autoUnmonitorPreviouslyDownloadedTracks":false,"recycleBin":"","recycleBinCleanupDays":7,"downloadPropersAndRepacks":"preferAndUpgrade","createEmptyArtistFolders":false,"deleteEmptyFolders":true,"fileDate":"albumReleaseDate","watchLibraryForChanges":false,"rescanAfterRefresh":"always","allowFingerprinting":"newFiles","setPermissionsLinux":false,"chmodFolder":"777","chownGroup":"","skipFreeSpaceCheckWhenImporting":false,"minimumFreeSpaceWhenImporting":100,"copyUsingHardlinks":true,"importExtraFiles":true,"extraFileExtensions":"jpg,png,lrc","id":1}')
+  # Keep installation-specific recycling, rescans, hardlinks and extra imports.
+  # Read first so omitted API fields cannot reset existing settings.
+  if currentMediaSettings=$(curl -fsS "$arrUrl/api/v1/config/mediamanagement" -H "X-Api-Key: ${arrApiKey}") &&
+     mediaSettings=$(printf '%s' "$currentMediaSettings" | python3 -c 'import json, sys
+settings = json.load(sys.stdin)
+if not isinstance(settings, dict) or not isinstance(settings.get("id"), int):
+    raise ValueError("invalid Lidarr media-management response")
+settings.update({"autoUnmonitorPreviouslyDownloadedTracks": False, "downloadPropersAndRepacks": "preferAndUpgrade", "createEmptyArtistFolders": True, "deleteEmptyFolders": False, "fileDate": "none", "watchLibraryForChanges": False, "allowFingerprinting": "newFiles", "setPermissionsLinux": False, "chmodFolder": "777", "chownGroup": "", "skipFreeSpaceCheckWhenImporting": False, "minimumFreeSpaceWhenImporting": 10000})
+if settings.get("extraFileExtensions") is None:
+    settings["extraFileExtensions"] = "lrc"
+if settings.get("importExtraFiles") is None:
+    settings["importExtraFiles"] = True
+print(json.dumps(settings))'); then
+    postSettingsToLidarr=$(curl -fsS "$arrUrl/api/v1/config/mediamanagement" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw "$mediaSettings") || log "ERROR :: Unable to save Lidarr Media Management Settings"
+  else
+    log "ERROR :: Unable to read Lidarr Media Management Settings; leaving them unchanged"
+  fi
 fi
 
-if [ "$configureMetadataConsumerSettings" == "true" ] || [ -z "$configureMetadataConsumerSettings" ]; then
+if [ "${configureMetadataConsumerSettings:-false}" == "true" ]; then
   log "Configuring Lidarr Metadata ConsumerSettings"
   postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/metadata/1?" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"enable":true,"name":"Kodi (XBMC) / Emby","fields":[{"name":"artistMetadata","value":true},{"name":"albumMetadata","value":true},{"name":"artistImages","value":true},{"name":"albumImages","value":true}],"implementationName":"Kodi (XBMC) / Emby","implementation":"XbmcMetadata","configContract":"XbmcMetadataSettings","infoLink":"https://wiki.servarr.com/lidarr/supported#xbmcmetadata","tags":[],"id":1}')
 fi
 
 if [ "$configureMetadataProviderSettings" == "true" ] || [ -z "$configureMetadataProviderSettings" ]; then
   log "Configuring Lidarr Metadata Provider Settings"
-  postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/config/metadataProvider" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"metadataSource":"","writeAudioTags":"newFiles","scrubAudioTags":false,"id":1}')
+  # Beets owns audio tags; keep Lidarr from overwriting them.
+  postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/config/metadataProvider" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"metadataSource":"","writeAudioTags":"no","scrubAudioTags":false,"embedCoverArt":false,"id":1}')
 fi
 
 if [ "$configureCustomScripts" == "true" ] || [ -z "$configureCustomScripts" ]; then
@@ -167,9 +184,7 @@ fi
 
 if [ "$configureTrackNamingSettings" == "true" ] || [ -z "$configureTrackNamingSettings" ]; then
   log "Configuring Lidarr Track Naming Settings"
-  postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/config/naming" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"renameTracks":true,"replaceIllegalCharacters":true,"standardTrackFormat":"{Artist CleanName} - {Album Type} - {Release Year} - {Album CleanTitle}/{medium:00}{track:00} - {Track CleanTitle}","multiDiscTrackFormat":"{Artist CleanName} - {Album Type} - {Release Year} - {Album CleanTitle}/{medium:00}{track:00} - {Track CleanTitle}","artistFolderFormat":"{Artist CleanName}{ (Artist Disambiguation)}","includeArtistName":false,"includeAlbumTitle":false,"includeQuality":false,"replaceSpaces":false,"id":1}')
-  postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/config/naming" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"renameTracks":true,"replaceIllegalCharacters":true,"standardTrackFormat":"{Artist CleanName} - {Album Type} - {Release Year} - {Album CleanTitle}/{medium:00}{track:00} - {Track CleanTitle}","multiDiscTrackFormat":"{Artist CleanName} - {Album Type} - {Release Year} - {Album CleanTitle}/{medium:00}{track:00} - {Track CleanTitle}","artistFolderFormat":"{Artist CleanName}{ (Artist Disambiguation)}","includeArtistName":false,"includeAlbumTitle":false,"includeQuality":false,"replaceSpaces":false,"id":1}')
-  postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/config/naming" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"renameTracks":true,"replaceIllegalCharacters":true,"standardTrackFormat":"{Artist CleanName} - {Album Type} - {Release Year} - {Album CleanTitle}/{medium:00}{track:00} - {Track CleanTitle}","multiDiscTrackFormat":"{Artist CleanName} - {Album Type} - {Release Year} - {Album CleanTitle}/{medium:00}{track:00} - {Track CleanTitle}","artistFolderFormat":"{Artist CleanName}{ (Artist Disambiguation)}","includeArtistName":false,"includeAlbumTitle":false,"includeQuality":false,"replaceSpaces":false,"id":1}')
+  postSettingsToLidarr=$(curl -s "$arrUrl/api/v1/config/naming" -X PUT -H 'Content-Type: application/json' -H "X-Api-Key: ${arrApiKey}" --data-raw '{"renameTracks":true,"replaceIllegalCharacters":true,"standardTrackFormat":"{Album Title} ({Release Year})/{Artist Name}-{Album Title}-{track:00}-{Track CleanTitle}-[{MediaInfo AudioBitRate}]-{Release Group}","multiDiscTrackFormat":"{Album Title} ({Release Year})/{Artist Name}-{Album Title}-CD{medium:00}-{track:00}-{Track CleanTitle}-[{MediaInfo AudioBitRate}]-{Release Group}","artistFolderFormat":"{Artist Name}{ (Artist Disambiguation)}","includeArtistName":false,"includeAlbumTitle":false,"includeQuality":false,"replaceSpaces":false,"id":1,"colonReplacementFormat":4}')
 fi
 
 

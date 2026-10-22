@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-scriptVersion="1.0"
+scriptVersion="1.2"
 scriptName="ReplayGainTagger"
 
 set -o pipefail
@@ -44,15 +44,19 @@ arrUrl="${arrUrl:-}"
 arrApiKey="${arrApiKey:-}"
 mode="event"
 dryRun="false"
+forceScan="false"
 explicitPath=""
+repairAudit=""
 
 usage () {
 	cat <<'EOF'
 Usage:
   ReplayGainTagger.bash
   ReplayGainTagger.bash --path /music/Artist/Album
+  ReplayGainTagger.bash --maintenance
   ReplayGainTagger.bash --audit [--path /music]
   ReplayGainTagger.bash --backfill [--dry-run] [--path /music]
+  ReplayGainTagger.bash --repair-audit /config/logs/replaygain-audit.log [--dry-run] [--force] [--path /music]
 
 Default mode is for Lidarr custom-script release import and upgrade events.
 Backfill and normal event mode write ReplayGain metadata tags; they do not modify audio samples.
@@ -62,11 +66,22 @@ EOF
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
+		--maintenance)
+			mode="maintenance"
+			;;
 		--audit)
 			mode="audit"
 			;;
+		--force)
+			forceScan="true"
+			;;
 		--backfill)
 			mode="backfill"
+			;;
+		--repair-audit)
+			mode="repair"
+			shift
+			repairAudit="${1:-}"
 			;;
 		--dry-run)
 			dryRun="true"
@@ -311,12 +326,13 @@ run_rsgain_album () {
 	currentFingerprint="$(printf 'replaygain-v2\0target=%s\0clip=%s\0truepeak=%s\0maxpeak=%s\0files=%s' \
 		"$replaygainTargetLoudness" "$replaygainClipMode" "$replaygainTruePeak" "$replaygainMaxPeak" \
 		"$(album_fingerprint "$albumPath")" | sha256sum | awk '{print $1}')"
-	if [ -f "$stampFile" ] && [ "$(cat "$stampFile")" = "$currentFingerprint" ]; then
+	if [ "$forceScan" != "true" ] && [ "$mode" != "repair" ] && [ -f "$stampFile" ] && [ "$(cat "$stampFile")" = "$currentFingerprint" ]; then
 		log "$albumPath :: ReplayGain scan already completed for this path; skipping duplicate event"
 		return 0
 	fi
 	if ! mkdir "$lockDir" 2>/dev/null; then
 		log "$albumPath :: ReplayGain scan is already running; skipping duplicate event"
+		[ "$mode" != "repair" ] || return 75
 		return 0
 	fi
 	activeLockDir="$lockDir"
@@ -350,15 +366,118 @@ run_rsgain_album () {
 	done
 	commandStatus=${PIPESTATUS[0]}
 	log "$albumPath :: ReplayGain scanner exited with status $commandStatus"
+	if [ "$mode" = "repair" ] && [ "$commandStatus" -eq 0 ]; then
+		if ! album_tags_complete "$albumPath"; then
+			log "$albumPath :: ERROR :: Scanner returned success but ReplayGain tags remain incomplete"
+			commandStatus=1
+		fi
+	fi
 	if [ "$commandStatus" -eq 0 ]; then
 		printf '%s\n' "$currentFingerprint" > "$stampFile"
 		status=0
 	else
 		log "$albumPath :: WARNING :: ReplayGain tagging failed; Lidarr import will not be rejected"
 		status=0
+		[ "$mode" != "repair" ] || status="$commandStatus"
 	fi
 	cleanup_active_lock
 	return "$status"
+}
+
+album_tags_complete () {
+	python3 - "$1" <<'PY'
+import os
+import sys
+from mutagen import File
+
+required = ('REPLAYGAIN_TRACK_GAIN', 'REPLAYGAIN_TRACK_PEAK',
+            'REPLAYGAIN_ALBUM_GAIN', 'REPLAYGAIN_ALBUM_PEAK')
+bad = 0
+for current, _, files in os.walk(sys.argv[1]):
+    for name in files:
+        if os.path.splitext(name)[1].lower() not in {'.flac', '.mp3', '.m4a', '.aac', '.opus'}:
+            continue
+        path = os.path.join(current, name)
+        try:
+            audio = File(path)
+            tags = getattr(audio, 'tags', None) or {}
+            keys = [str(k).upper().replace('-', '_') for k in tags]
+            complete = audio is not None and all(any(tag in key for key in keys) for tag in required)
+        except Exception:
+            complete = False
+        if not complete:
+            print('REPAIR_INCOMPLETE\t' + path)
+            bad += 1
+sys.exit(1 if bad else 0)
+PY
+}
+
+repair_from_audit () {
+	local target="$1" rootPath="$2" albumList albumDir
+	local repaired=0 complete=0 failed=0 selected=0
+	if [ ! -f "$repairAudit" ]; then
+		log "ERROR :: --repair-audit requires an existing audit log"
+		return 2
+	fi
+	if ! path_inside_root "$target" "$rootPath"; then
+		log "ERROR :: Refusing repair outside music root: $target"
+		return 2
+	fi
+	albumList="$(mktemp)"
+	if ! python3 - "$repairAudit" "$rootPath" "$target" > "$albumList" <<'PY'
+import os
+import sys
+
+audit, root, target = sys.argv[1:]
+root, target = os.path.realpath(root), os.path.realpath(target)
+albums = set()
+missing = 0
+with open(audit, encoding='utf-8-sig') as stream:
+    for line in stream:
+        state, sep, path = line.rstrip('\r\n').partition('\t')
+        if not sep or state not in ('UNTAGGED', 'PARTIAL'):
+            continue
+        if not os.path.isabs(path) or os.path.commonpath([root, os.path.realpath(path)]) != root:
+            raise ValueError('audit contains a file outside the music root')
+        if os.path.commonpath([target, os.path.realpath(path)]) != target:
+            continue
+        if not os.path.isfile(path):
+            missing += 1
+            continue
+        parts = os.path.relpath(path, root).split(os.sep)
+        if len(parts) < 3:
+            print('REPAIR_REVIEW\t' + path + '\tno album folder; assign an album before calculating album gain', file=sys.stderr)
+            continue
+        album = os.path.join(root, *parts[:2])
+        albums.add(album)
+for album in sorted(albums):
+    sys.stdout.buffer.write(os.fsencode(album) + b'\0')
+if missing:
+    print(f'ReplayGain repair: skipped {missing} audit paths no longer present', file=sys.stderr)
+PY
+	then
+		rm -f "$albumList"
+		log "ERROR :: Unable to build repair plan; no files scanned"
+		return 2
+	fi
+	log "Targeted repair: only albums containing PARTIAL/UNTAGGED audit entries; full albums are scanned for consistent album gain."
+	while IFS= read -r -d '' albumDir; do
+		selected=$((selected + 1))
+		if [ "$dryRun" = "true" ]; then
+			log "REPAIR_PREVIEW :: $albumDir"
+		elif [ "$forceScan" != "true" ] && album_tags_complete "$albumDir" >/dev/null; then
+			complete=$((complete + 1))
+			log "$albumDir :: Already complete; no repair needed"
+		elif run_rsgain_album "$albumDir" "$rootPath"; then
+			repaired=$((repaired + 1))
+		else
+			failed=$((failed + 1))
+			log "$albumDir :: ERROR :: Repair incomplete or locked; retained for retry"
+		fi
+	done < "$albumList"
+	rm -f "$albumList"
+	log "REPAIR SUMMARY :: selected=$selected repaired=$repaired already_complete=$complete failed=$failed dry_run=$dryRun"
+	[ "$failed" -eq 0 ]
 }
 
 audit_path () {
@@ -368,6 +487,8 @@ audit_path () {
 		log "ERROR :: Refusing audit outside music root: $target (root: $rootPath)"
 		return 2
 	fi
+	local auditStarted=$SECONDS auditStatus
+	log "AUDIT START :: $(date -u +%FT%TZ) :: $target"
 	python3 - "$target" "$rootPath" <<'PY'
 import os
 import sys
@@ -406,7 +527,13 @@ def has_tag(tags, wanted):
             return True
     return False
 
-for current, _, files in os.walk(root):
+def scan_error(error):
+    raise error
+
+if not os.path.isdir(root):
+    raise FileNotFoundError(root)
+
+for current, _, files in os.walk(root, onerror=scan_error):
     for name in files:
         extension = os.path.splitext(name)[1].lower()
         if extension not in known_audio_extensions:
@@ -461,6 +588,9 @@ print(
     f"mixed_albums={mixed}"
 )
 PY
+	auditStatus=$?
+	log "AUDIT END :: $(date -u +%FT%TZ) :: elapsed_seconds=$((SECONDS - auditStarted)) status=$auditStatus"
+	return "$auditStatus"
 }
 
 backfill_path () {
@@ -505,12 +635,53 @@ backfill_path () {
 	log "$target :: Backfill complete; album directories processed=$albumCount"
 }
 
+maintenance () {
+    [ "${enableReplaygainMaintenance:-false}" = "true" ] || return 0
+    local interval="${replaygainMaintenanceDays:-7}" now last=0 status
+    if ! [[ "$interval" =~ ^[1-9][0-9]*$ ]]; then
+        log "ERROR :: replaygainMaintenanceDays must be a positive integer"
+        return 2
+    fi
+    mkdir -p "$replaygainStateDir" || return 1
+    command -v flock >/dev/null 2>&1 || { log "ERROR :: flock is required for maintenance"; return 2; }
+    exec 9>"$replaygainStateDir/maintenance.lock"
+    flock -n 9 || return 0
+    now=$(date +%s)
+    if [ -f "$replaygainStateDir/maintenance.last-attempt" ]; then
+        read -r last < "$replaygainStateDir/maintenance.last-attempt"
+    fi
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    [ "$((now - last))" -ge "$((interval * 86400))" ] || return 0
+    # Persist attempts so failures do not cause an hourly full-library retry.
+    printf '%s\n' "$now" > "$replaygainStateDir/maintenance.last-attempt"
+    repairAudit="$replaygainStateDir/maintenance-audit.log"
+    log "MAINTENANCE START :: $(date -u +%FT%TZ)"
+    audit_path "$musicRoot" "$musicRoot" > "$repairAudit"
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        repair_from_audit "$musicRoot" "$musicRoot"
+        status=$?
+    fi
+    log "MAINTENANCE END :: $(date -u +%FT%TZ) :: elapsed_seconds=$(($(date +%s) - now)) status=$status audit=$repairAudit"
+    return "$status"
+}
+
 musicRoot="$(resolve_music_root)"
 
 case "$mode" in
+	maintenance)
+		maintenance
+		exit $?
+		;;
+	repair)
+		targetPath="${explicitPath:-$musicRoot}"
+		repair_from_audit "$targetPath" "$musicRoot"
+		exit $?
+		;;
 	audit)
 		targetPath="${explicitPath:-$musicRoot}"
 		audit_path "$targetPath" "$musicRoot"
+		exit $?
 		;;
 	backfill)
 		targetPath="${explicitPath:-$musicRoot}"

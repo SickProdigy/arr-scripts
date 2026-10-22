@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.35"
+scriptVersion="1.4.36"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -26,6 +26,7 @@ apk add -U --upgrade --no-cache \
   jq \
   git \
   coreutils \
+  util-linux \
   gcc \
   ffmpeg \
   imagemagick \
@@ -112,11 +113,17 @@ chmod +x /custom-services.d/MusicBrainzGenres
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Ratings.bash" -o /config/extended/Ratings.bash
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Ratings.service.bash" -o /custom-services.d/Ratings
 chmod +x /custom-services.d/Ratings
+curl -sfL "${arrScriptsRawBase%/}/lidarr/ReplayGain.service.bash" -o /custom-services.d/ReplayGain || exit 1
+chmod +x /custom-services.d/ReplayGain
+curl -sfL "${arrScriptsRawBase%/}/lidarr/LibraryMaintenance.bash" -o /config/extended/LibraryMaintenance.bash || exit 1
+curl -sfL "${arrScriptsRawBase%/}/lidarr/LibraryMaintenance.service.bash" -o /custom-services.d/LibraryMaintenance || exit 1
+chmod +x /custom-services.d/LibraryMaintenance
 curl -sfL "${arrScriptsRawBase%/}/lidarr/BeetsLyrics.bash" -o /config/extended/BeetsLyrics.bash
 mkdir -p /config/extended/python
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Lyrics.bash" -o /config/extended/Lyrics.bash
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Lyrics.service.bash" -o /custom-services.d/Lyrics
 curl -sfL "${arrScriptsRawBase%/}/lidarr/python/Lyrics.py" -o /config/extended/python/Lyrics.py
+curl -sfL "${arrScriptsRawBase%/}/lidarr/python/ArtworkMigration.py" -o /config/extended/python/ArtworkMigration.py || exit 1
 chmod +x /custom-services.d/Lyrics
 mkdir -p /config/extended/lyrics
 chown "${PUID:-1000}:${PGID:-1000}" /config/extended/lyrics

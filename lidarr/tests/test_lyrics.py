@@ -66,6 +66,12 @@ class QueueTests(unittest.TestCase):
     def test_existing_lyrics_never_requested(self):
         self.has.return_value = True
         self.assertEqual(self.enqueue(), 0)
+
+    def test_strict_maintenance_enqueue_reports_partial_errors(self):
+        broken = Mock(side_effect=OSError('unreadable file'))
+        with self.assertRaisesRegex(RuntimeError, 'enqueue incomplete'):
+            self.q.enqueue(self.album, '12', broken, self.has, strict=True)
+        self.assertEqual(self.q.db.execute('select count(*) from jobs').fetchone()[0], 0)
         self.has.return_value = False
         self.enqueue()
         self.has.return_value = True
