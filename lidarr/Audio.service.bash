@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.54"
+scriptVersion="2.55"
 scriptName="Audio"
 
 ### Import Settings
@@ -235,9 +235,14 @@ Configuration () {
 	tidaldlFail=0
 	deemixFail=0
 	log "-----------------------------------------------------------------------------"
-	log "┌─┐┌┬┐┌─┐┬ ┌ ┬─┐┬──┐┌─┐┬─┐┌┬┐┌─┐┌ ┐"
-	log "└─┐ │ │  │─┴┐│─┘│─┬┘│ ││ │ │ │ ┬└┬┘"
-	log "└─┘└┴┘┴─┘└  └┴  └ └ └─┘┴─┘└┴┘└─┘ ┴"
+	local bannerPrefix banner
+	bannerPrefix="$(date '+%F %T') :: $scriptName :: $scriptVersion :: "
+	printf -v banner '%s%s\n%s%s\n%s%s\n' \
+		"$bannerPrefix" "┌─┐┌┬┐┌─┐┬ ┌ ┬─┐┬──┐┌─┐┬─┐┌┬┐┌─┐┌ ┐" \
+		"$bannerPrefix" "└─┐ │ │  │─┴┐│─┘│─┬┘│ ││ │ │ │ ┬└┬┘" \
+		"$bannerPrefix" "└─┘└┴┘┴─┘└  └┴  └ └ └─┘┴─┘└┴┘└─┘ ┴"
+	printf '%s' "$banner"
+	printf '%s' "$banner" >> "/config/logs/$logFileName"
 	log " Presents: $scriptName ($scriptVersion)"
 	log " May the beats be with you!"
 	log "-----------------------------------------------------------------------------"
