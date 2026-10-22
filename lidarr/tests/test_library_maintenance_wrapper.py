@@ -1,4 +1,6 @@
 import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 from pathlib import Path
 import shlex
 import subprocess
@@ -11,6 +13,29 @@ from test_musicbrainz_genres_wrapper import ROOT, BASH, shell_path
 
 
 class MaintenanceWrapperTests(unittest.TestCase):
+    def test_readiness_waits_for_valid_authenticated_lidarr_status(self):
+        replies = [(503, b'{}'), (401, b'{}'), (200, b'{}'), (200, b'{"version":"3.1.0"}')]
+        seen = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append((self.path, self.headers.get('X-Api-Key')))
+                status, body = replies.pop(0)
+                self.send_response(status); self.end_headers(); self.wfile.write(body)
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            settings = f'export LIDARR_URL="http://127.0.0.1:{server.server_port}/lidarr"\n'
+            for expected in (False, False, False, True):
+                result, trace = self.invoke(('--ready',), extra=settings)
+                self.assertEqual(result.returncode == 0, expected, result.stderr)
+                self.assertEqual(trace, [])
+                self.assertNotIn('private-test-key', result.stdout + result.stderr)
+            self.assertEqual(seen, [('/lidarr/api/v1/system/status', 'private-test-key')] * 4)
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
     def test_rename_rollback_requires_separate_review_apply_and_verify(self):
         for arguments, action in (
             (('--rename-rollback-plan', '/config/forward.json', '/config/forward-journal.json', '/config/reverse.json'), 'rollback-plan'),

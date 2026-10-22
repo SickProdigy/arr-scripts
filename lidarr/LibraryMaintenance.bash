@@ -35,6 +35,23 @@ PY
     export LIDARR_URL="${LIDARR_URL:-${credentials[0]%/}}"
     export LIDARR_API_KEY="${LIDARR_API_KEY:-${credentials[1]}}"
 fi
+if [ "${1:-}" = --ready ]; then
+    python3 - <<'PY'
+import os
+import sys
+import requests
+try:
+    response = requests.get(os.environ['LIDARR_URL'].rstrip('/') + '/api/v1/system/status',
+        headers={'X-Api-Key': os.environ['LIDARR_API_KEY']}, timeout=5)
+    response.raise_for_status()
+    if not isinstance(response.json().get('version'), str):
+        raise ValueError('invalid status response')
+except (requests.RequestException, ValueError, TypeError, AttributeError):
+    print('Library maintenance: waiting for Lidarr API readiness')
+    sys.exit(1)
+PY
+    exit $?
+fi
 export EXTENDED_CONF="$conf"
 export LYRICS_URL="${lyricsUrl:-https://api.lrcmux.dev}"
 root="${libraryMaintenanceRoot:-/music}"
