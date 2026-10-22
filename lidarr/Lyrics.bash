@@ -2,7 +2,7 @@
 # Import hooks only enqueue locally. Provider requests belong to the service.
 umask 0002
 # Run file writes as the same user as Lidarr, including manual docker exec calls.
-if [ "${1:-}" = --work ] && [ "$(id -u)" = 0 ] && command -v s6-setuidgid >/dev/null; then
+if [[ "${1:-}" = --work || "${1:-}" = --maintenance ]] && [ "$(id -u)" = 0 ] && command -v s6-setuidgid >/dev/null; then
     exec s6-setuidgid abc bash "$0" "$@"
 fi
 source "${ARR_EXTENDED_CONF:-/config/extended.conf}"
@@ -11,7 +11,13 @@ export LYRICS_CONFIG="${ARR_CONFIG_DIR:-/config}"
 export LYRICS_URL="${lyricsUrl:-https://api.lrcmux.dev}"
 export LYRICS_ROOTS="${lyricsLibraryRoot:-/music}"
 helper="${ARR_LYRICS_WORKER:-/config/extended/python/Lyrics.py}"
-if [ "${1:-}" = --status ]; then
+if [ "${1:-}" = --maintenance ]; then
+    [ "${enableLyricsMaintenance:-false}" = true ] || exit 0
+    interval="${lyricsMaintenanceDays:-7}"
+    [[ "$interval" =~ ^[1-9][0-9]*$ ]] || { echo 'Lyrics: invalid maintenance interval'; exit 2; }
+    python3 "$helper" --maintenance "${lyricsLibraryRoot:-/music}" --maintenance-days "$interval"
+    exit $?
+elif [ "${1:-}" = --status ]; then
     python3 "$helper" --status
 elif [ "${1:-}" = --retry ]; then
     python3 "$helper" --retry "${2:?Job ID required}"

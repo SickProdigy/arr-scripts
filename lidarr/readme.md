@@ -277,6 +277,9 @@ in `extended.conf`; the normal installer includes the helper and background work
 Successful metadata tagging queues lyrics locally. The independent worker calls
 LRCMux directly, embeds results, and preserves existing lyrics without delaying
 downloads/imports. See [configuration and behavior](lyrics.md).
+Set `enableLyricsMaintenance="true"` for a weekly scan of existing songs missing
+lyrics. Scan and worker logs are `lyrics-maintenance.log` and `lyrics.log` in
+`/config/logs`.
 
 ## Optional library maintenance
 

@@ -14,11 +14,20 @@ In `/config/extended.conf`:
 enableLyrics="true"
 lyricsTimeout="3m"
 lyricsUrl="https://api.lrcmux.dev"
+enableLyricsMaintenance="true"
+lyricsMaintenanceDays="7"
 ```
 
 The public endpoint needs no API key or additional container. An optional
 `lyricsUrl` override supports a custom/self-hosted LRCMux instance. LRCMux handles
 its provider aggregation; Beets' `lyrics.sources` no longer controls this helper.
+
+Optional maintenance (disabled by default) scans the library for missing lyrics
+weekly and feeds the same queue. Set `lyricsLibraryRoot="/music"` for a different
+container library path. Existing embedded lyrics are preserved; queued tracks are
+processed gradually. Scan progress and start/end times go to
+`/config/logs/lyrics-maintenance.log`; fetching/embedding goes to
+`/config/logs/lyrics.log`. Failed scans retry after an hour.
 
 `lyricsTimeout` bounds each background worker invocation, not the importer.
 The service checks every 30 seconds, processes up to ten due tracks sequentially,

@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.37"
+scriptVersion="1.4.38"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -125,6 +125,8 @@ curl -sfL "${arrScriptsRawBase%/}/lidarr/Lyrics.service.bash" -o /custom-service
 curl -sfL "${arrScriptsRawBase%/}/lidarr/python/Lyrics.py" -o /config/extended/python/Lyrics.py
 curl -sfL "${arrScriptsRawBase%/}/lidarr/python/ArtworkMigration.py" -o /config/extended/python/ArtworkMigration.py || exit 1
 chmod +x /custom-services.d/Lyrics
+curl -sfL "${arrScriptsRawBase%/}/lidarr/LyricsMaintenance.service.bash" -o /custom-services.d/LyricsMaintenance || exit 1
+chmod +x /custom-services.d/LyricsMaintenance
 mkdir -p /config/extended/lyrics
 chown "${PUID:-1000}:${PGID:-1000}" /config/extended/lyrics
 chmod 2775 /config/extended/lyrics

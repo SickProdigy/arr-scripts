@@ -1,4 +1,5 @@
 import importlib.util
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,51 @@ spec.loader.exec_module(lyrics)
 
 META = dict(artist='Beyoncé', title='Song', album='Album', duration=120.0,
             recording='recording-id', release_track='release-track', disc=1, track=1)
+
+
+class MaintenanceTests(unittest.TestCase):
+    def test_successful_scan_waits_a_week_and_failures_retry_after_an_hour(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); state = root/'state'; state.mkdir()
+            queue = Mock(); queue.enqueue.return_value = 3
+            with patch.object(lyrics, 'lock', return_value=nullcontext(True)), patch.object(lyrics, 'Queue', return_value=queue):
+                lyrics.maintenance(state, root, clock=lambda: 100000)
+                queue.enqueue.assert_called_once_with(root, strict=True)
+                queue.db.close.assert_called_once()
+                lyrics.maintenance(state, root, clock=lambda: 100001)
+                self.assertEqual(queue.enqueue.call_count, 1)
+                queue.enqueue.side_effect = RuntimeError('unreadable file')
+                with self.assertRaises(RuntimeError):
+                    lyrics.maintenance(state, root, clock=lambda: 800000)
+                record = json.loads((state/'maintenance.json').read_text())
+                self.assertEqual(record['status'], 'failed')
+                self.assertIn('elapsed_seconds', record)
+                lyrics.maintenance(state, root, clock=lambda: 803599)
+                self.assertEqual(queue.enqueue.call_count, 2)
+                queue.enqueue.side_effect = None
+                lyrics.maintenance(state, root, clock=lambda: 803600)
+                self.assertEqual(queue.enqueue.call_count, 3)
+
+    def test_invalid_root_interval_and_active_scan_do_not_enqueue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(lyrics, 'Queue') as queue:
+                with self.assertRaises(ValueError):
+                    lyrics.maintenance(root, root, days=0)
+                with self.assertRaises(ValueError):
+                    lyrics.maintenance(root, root/'absent')
+                with patch.object(lyrics, 'lock', return_value=nullcontext(False)):
+                    lyrics.maintenance(root, root)
+                queue.assert_not_called()
+
+    @unittest.skipIf(os.name == 'nt', 'Linux service locking')
+    def test_scanning_does_not_lock_out_lyrics_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with lyrics.lock(directory) as worker:
+                with lyrics.lock(directory, 'maintenance.lock') as scanner:
+                    self.assertTrue(worker); self.assertTrue(scanner)
+                    with lyrics.lock(directory, 'maintenance.lock') as other:
+                        self.assertFalse(other)
 
 
 class QueueTests(unittest.TestCase):

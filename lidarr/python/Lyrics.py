@@ -347,10 +347,10 @@ class Resolver:
 
 
 @contextmanager
-def lock(state):
+def lock(state, name='worker.lock'):
     import fcntl
     Path(state).mkdir(parents=True, exist_ok=True)
-    with (Path(state)/'worker.lock').open('a') as handle:
+    with (Path(state)/name).open('a') as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -359,18 +359,60 @@ def lock(state):
             yield True
 
 
+def maintenance(state, root, days=7, clock=time.time):
+    if days < 1:
+        raise ValueError('maintenance interval must be positive')
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise ValueError('lyrics library root does not exist')
+    with lock(state, 'maintenance.lock') as acquired:
+        if not acquired:
+            return
+        marker = Path(state)/'maintenance.json'
+        previous = json.loads(marker.read_text()) if marker.exists() else {}
+        interval = days * 86400 if previous.get('status') == 'complete' else 3600
+        started = clock()
+        if previous.get('root') == str(root) and started - previous.get('attempt', 0) < interval:
+            return
+        record = dict(root=str(root), attempt=started, status='running')
+        def save():
+            staged = marker.with_suffix('.tmp')
+            staged.write_text(json.dumps(record), encoding='utf8')
+            os.replace(staged, marker)
+        save()
+        log('MAINTENANCE START '+time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(started)))
+        queue = None
+        try:
+            queue = Queue(state)
+            record['queued'] = queue.enqueue(root, strict=True)
+            record['status'] = 'complete'
+        except Exception:
+            record['status'] = 'failed'
+            raise
+        finally:
+            if queue is not None:
+                queue.db.close()
+            record.update(ended=clock(), elapsed_seconds=round(clock()-started, 2))
+            save()
+            log('MAINTENANCE END '+json.dumps(record))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--enqueue', type=Path)
     parser.add_argument('--strict-enqueue', action='store_true', help='Return failure if any file could not be enqueued (maintenance workers)')
     parser.add_argument('--album-id', default='')
     parser.add_argument('--work', action='store_true')
+    parser.add_argument('--maintenance', type=Path, help='Periodically enqueue missing lyrics under this root')
+    parser.add_argument('--maintenance-days', type=int, default=7)
     parser.add_argument('--retry', help='Reset one reviewed job ID after fixing its cause')
     parser.add_argument('--status', action='store_true', help='Show queue states and job IDs without network requests')
     args = parser.parse_args()
     config = os.environ.get('LYRICS_CONFIG', '/config')
     state = Path(config)/'extended/lyrics'
-    if args.status:
+    if args.maintenance:
+        maintenance(state, args.maintenance, args.maintenance_days)
+    elif args.status:
         queue = Queue(state)
         try:
             for row in queue.db.execute('SELECT id,state,next_run,attempts FROM jobs ORDER BY next_run'):
