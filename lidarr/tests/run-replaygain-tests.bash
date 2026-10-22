@@ -398,6 +398,14 @@ test_audit_timing_and_maintenance_schedule () {
     assert_contains "AUDIT END" "$root/state/maintenance-audit.log" "maintenance saves timed audit"
     run_tagger "$root" --maintenance
     assert_not_contains "MAINTENANCE START" "$root/output.log" "schedule survives separate invocations"
+    # Simulate a terminated attempt: there is no successful-completion marker.
+    rm "$root/state/maintenance.last-success"
+    run_tagger "$root" --maintenance
+    assert_not_contains "MAINTENANCE START" "$root/output.log" "interrupted attempts do not retry immediately"
+    printf '%s\n' "$(( $(date +%s) - 7200 ))" > "$root/state/maintenance.last-attempt"
+    REPLAYGAIN_MOCK_TAG=true run_tagger "$root" --maintenance
+    assert_contains "MAINTENANCE END" "$root/output.log" "interrupted attempt retries before the weekly interval"
+    [ -s "$root/state/maintenance.last-success" ] || { echo 'FAIL: successful retry not recorded'; exit 1; }
     echo 'replaygainMaintenanceDays="bad"' >> "$root/config/extended.conf"
     if run_tagger "$root" --maintenance; then
         echo "FAIL: invalid maintenance interval accepted"

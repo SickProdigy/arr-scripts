@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-scriptVersion="1.2"
+scriptVersion="1.3"
 scriptName="ReplayGainTagger"
 
 set -o pipefail
@@ -637,7 +637,7 @@ backfill_path () {
 
 maintenance () {
     [ "${enableReplaygainMaintenance:-false}" = "true" ] || return 0
-    local interval="${replaygainMaintenanceDays:-7}" now last=0 status
+    local interval="${replaygainMaintenanceDays:-7}" now last=0 lastSuccess=0 waitSeconds status
     if ! [[ "$interval" =~ ^[1-9][0-9]*$ ]]; then
         log "ERROR :: replaygainMaintenanceDays must be a positive integer"
         return 2
@@ -651,8 +651,17 @@ maintenance () {
         read -r last < "$replaygainStateDir/maintenance.last-attempt"
     fi
     [[ "$last" =~ ^[0-9]+$ ]] || last=0
-    [ "$((now - last))" -ge "$((interval * 86400))" ] || return 0
-    # Persist attempts so failures do not cause an hourly full-library retry.
+    if [ -f "$replaygainStateDir/maintenance.last-success" ]; then
+        read -r lastSuccess < "$replaygainStateDir/maintenance.last-success"
+    fi
+    [[ "$lastSuccess" =~ ^[0-9]+$ ]] || lastSuccess=0
+    waitSeconds=3600
+    if [ "$lastSuccess" -gt 0 ] && [ "$lastSuccess" -ge "$last" ]; then
+        waitSeconds=$((interval * 86400))
+    fi
+    [ "$((now - last))" -ge "$waitSeconds" ] || return 0
+    # Interrupted/failed attempts retry after an hour; only success earns the
+    # configured weekly interval. The lock prevents concurrent full audits.
     printf '%s\n' "$now" > "$replaygainStateDir/maintenance.last-attempt"
     repairAudit="$replaygainStateDir/maintenance-audit.log"
     log "MAINTENANCE START :: $(date -u +%FT%TZ)"
@@ -661,6 +670,9 @@ maintenance () {
     if [ "$status" -eq 0 ]; then
         repair_from_audit "$musicRoot" "$musicRoot"
         status=$?
+    fi
+    if [ "$status" -eq 0 ]; then
+        printf '%s\n' "$now" > "$replaygainStateDir/maintenance.last-success"
     fi
     log "MAINTENANCE END :: $(date -u +%FT%TZ) :: elapsed_seconds=$(($(date +%s) - now)) status=$status audit=$repairAudit"
     return "$status"
