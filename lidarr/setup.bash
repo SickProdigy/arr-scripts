@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.42"
+scriptVersion="1.4.43"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -86,6 +86,12 @@ if [ ! -d /config/extended/tidal_dl_sg ] && [ -d /config/extended/tidaler ]; the
 fi
 
 export arrScriptsRawBase="${ARR_SCRIPTS_RAW_BASE:-https://raw.githubusercontent.com/SickProdigy/arr-scripts/main}"
+
+# Optional shared dashboard; the service sleeps without opening a port when disabled.
+curl -sfL "${arrScriptsRawBase%/}/universal/dashboard.py" -o /config/extended/dashboard.py || exit 1
+curl -sfL "${arrScriptsRawBase%/}/universal/Dashboard.service.bash" -o /custom-services.d/Dashboard || exit 1
+sed -i 's/__APP__/lidarr/g' /custom-services.d/Dashboard
+chmod +x /custom-services.d/Dashboard
 
 parallel ::: \
   'echo "Download QueueCleaner service..." && curl -sfL ${arrScriptsRawBase%/}/universal/services/QueueCleaner -o /custom-services.d/QueueCleaner && echo "Done"' \

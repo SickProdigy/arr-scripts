@@ -11,6 +11,7 @@ this folder has no separate installer or container. Settings go in the applicati
 | File | Purpose |
 | --- | --- |
 | [functions.bash](functions.bash) | Shared logging, configuration checks, and Arr connection helpers used by the other scripts. |
+| [dashboard.py](dashboard.py) | Optional web dashboard for approved tasks, job status, and logs. |
 | [services/QueueCleaner](services/QueueCleaner) | Removes stuck or failed queue items so the Arr app can retry. |
 | [services/Recyclarr](services/Recyclarr) | Updates Sonarr/Radarr quality profiles, quality limits, and custom-format scores. |
 | [Soulseek.bash](Soulseek.bash) | Starts the shared Soulseek worker using your app's configuration. |
@@ -22,6 +23,25 @@ this folder has no separate installer or container. Settings go in the applicati
 `functions.bash` is loaded by scripts automatically; users do not run it separately.
 The installers place background services in `/custom-services.d/` and supporting
 scripts in `/config/extended/`.
+
+## Optional web dashboard
+
+Each Arr container can run its own dashboard instance. Publish the dashboard port
+from that container, then enable it in `/config/extended.conf`:
+
+```bash
+enableDashboard="true"
+dashboardPort="8687" # Lidarr; Sonarr 8990, Radarr 7879, Readarr 8788
+dashboardUsername="your_username"
+dashboardPassword="your_password"
+```
+
+Restart twice after first installing the dashboard service. Open the mapped port
+in a browser. Lidarr currently provides task controls for ReplayGain, lyrics,
+ratings, release-group repair, and library audits. Sonarr, Radarr, and Readarr
+initially provide the shared log viewer while their task adapters are added.
+Long jobs continue when the browser closes. Write tasks that can affect a broad
+part of the library require a recent successful preview.
 
 ## QueueCleaner
 

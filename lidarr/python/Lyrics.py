@@ -75,6 +75,29 @@ def local_lyrics(path):
     return ''
 
 
+def audit(directory, has=embedded):
+    directory = Path(directory).resolve()
+    if not directory.is_dir():
+        raise ValueError('lyrics library root does not exist')
+    result = dict(scanned=0, missing=0, complete=0, failed=0)
+    log('AUDIT START '+str(directory))
+    for path in directory.rglob('*'):
+        if not path.is_file() or path.suffix.lower() not in EXTENSIONS or path.is_symlink():
+            continue
+        result['scanned'] += 1
+        try:
+            if has(path):
+                result['complete'] += 1
+            else:
+                result['missing'] += 1
+        except Exception:
+            result['failed'] += 1
+        if result['scanned'] % 1000 == 0:
+            log(f"audit progress: checked {result['scanned']} audio files; missing {result['missing']}")
+    log('AUDIT END '+json.dumps(result, sort_keys=True))
+    return result
+
+
 class Deferred(Exception):
     def __init__(self, reason, seconds=300):
         self.reason, self.seconds = reason, seconds
@@ -400,6 +423,7 @@ def maintenance(state, root, days=7, clock=time.time):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--enqueue', type=Path)
+    parser.add_argument('--audit', type=Path, help='Count files missing embedded lyrics without queuing or writing')
     parser.add_argument('--strict-enqueue', action='store_true', help='Return failure if any file could not be enqueued (maintenance workers)')
     parser.add_argument('--album-id', default='')
     parser.add_argument('--work', action='store_true')
@@ -410,7 +434,9 @@ def main():
     args = parser.parse_args()
     config = os.environ.get('LYRICS_CONFIG', '/config')
     state = Path(config)/'extended/lyrics'
-    if args.maintenance:
+    if args.audit:
+        audit(args.audit)
+    elif args.maintenance:
         maintenance(state, args.maintenance, args.maintenance_days)
     elif args.status:
         queue = Queue(state)

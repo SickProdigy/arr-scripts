@@ -23,6 +23,18 @@ META = dict(artist='Beyoncé', title='Song', album='Album', duration=120.0,
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_audit_counts_missing_complete_and_failed_without_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('missing.flac', 'complete.mp3', 'broken.ogg'):
+                (root/name).write_bytes(b'fixture')
+            def has(path):
+                if path.name == 'broken.ogg':
+                    raise OSError('bad file')
+                return path.name == 'complete.mp3'
+            self.assertEqual(lyrics.audit(root, has), {
+                'scanned': 3, 'missing': 1, 'complete': 1, 'failed': 1})
+
     def test_successful_scan_waits_a_week_and_failures_retry_after_an_hour(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); state = root/'state'; state.mkdir()

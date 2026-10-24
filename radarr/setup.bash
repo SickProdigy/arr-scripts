@@ -1,6 +1,7 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.3.4"
+scriptVersion="1.3.5"
 SMA_PATH="/usr/local/sma"
+export arrScriptsRawBase="${ARR_SCRIPTS_RAW_BASE:-https://raw.githubusercontent.com/SickProdigy/arr-scripts/main}"
 
 if [ -f /config/setup_version.txt ]; then
   source /config/setup_version.txt
@@ -66,6 +67,11 @@ chmod 777 /recyclarr/recyclarr
 apk add --no-cache -X http://dl-cdn.alpinelinux.org/alpine/edge/community dotnet9-runtime
 
 mkdir -p /custom-services.d
+mkdir -p /config/extended
+curl -sfL "${arrScriptsRawBase%/}/universal/dashboard.py" -o /config/extended/dashboard.py || exit 1
+curl -sfL "${arrScriptsRawBase%/}/universal/Dashboard.service.bash" -o /custom-services.d/Dashboard || exit 1
+sed -i 's/__APP__/radarr/g' /custom-services.d/Dashboard
+chmod +x /custom-services.d/Dashboard
 echo "Download QueueCleaner service..."
 curl https://raw.githubusercontent.com/SickProdigy/arr-scripts/main/universal/services/QueueCleaner -o /custom-services.d/QueueCleaner
 echo "Done"

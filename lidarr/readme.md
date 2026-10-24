@@ -38,6 +38,13 @@ configuration. If you change `importPath`, keep Lidarr's blackhole download
 client folder aligned with it. Soulseek uses `/downloads/soulseek` as described
 in the [Soulseek setup below](#optional-soulseek-downloads).
 
+### Optional web dashboard
+
+The shared [arr-scripts dashboard](../universal/readme.md#optional-web-dashboard)
+can run ReplayGain, lyrics, ratings, release-group, and library-audit tasks while
+showing their status and logs. It is disabled by default and uses container port
+`8687` when enabled; Lidarr continues using `8686`.
+
 ### Optional Soulseek downloads
 
 To download missing albums through Soulseek, run slskd or Nicotine+ with its

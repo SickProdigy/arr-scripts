@@ -10,6 +10,11 @@ echo "************ install python packages ************"
 pip install --upgrade --no-cache-dir -U --break-system-packages yq
 
 mkdir -p /custom-services.d
+mkdir -p /config/extended
+curl -sfL "${arrScriptsRawBase%/}/universal/dashboard.py" -o /config/extended/dashboard.py || exit 1
+curl -sfL "${arrScriptsRawBase%/}/universal/Dashboard.service.bash" -o /custom-services.d/Dashboard || exit 1
+sed -i 's/__APP__/readarr/g' /custom-services.d/Dashboard
+chmod +x /custom-services.d/Dashboard
 echo "Download AutoConfig service..."
 curl "${arrScriptsRawBase%/}/readarr/AutoConfig.bash" -o /custom-services.d/AutoConfig
 echo "Done"
