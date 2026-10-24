@@ -20,7 +20,7 @@ export SPOTIFY_CLIENT_ID="${spotifyClientId:-}" SPOTIFY_CLIENT_SECRET="${spotify
 export TIDAL_CLIENT_ID="${tidalClientId:-}" TIDAL_CLIENT_SECRET="${tidalClientSecret:-}" TIDAL_COUNTRY_CODE="${tidalCountryCode:-US}"
 export DISCOGS_TOKEN="${discogsToken:-}"
 export RATINGS_SOURCE="${ratingsSource:-subsonic}"
-export MB_USERNAME="${musicBrainzUsername:-}" MB_TOKEN="${musicBrainzToken:-}"
+export MB_USERNAME="${musicBrainzUsername:-}" MB_TOKEN="${musicBrainzPassword:-${musicBrainzToken:-}}"
 export MB_OAUTH_CLIENT_ID="${musicBrainzOAuthClientId:-}"
 export MB_OAUTH_CLIENT_SECRET="${musicBrainzOAuthClientSecret:-}"
 export MB_OAUTH_REDIRECT_URI="${musicBrainzOAuthRedirectUri:-urn:ietf:wg:oauth:2.0:oob}"

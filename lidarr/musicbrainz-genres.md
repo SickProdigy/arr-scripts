@@ -12,22 +12,23 @@ Add these settings to your existing `/config/extended.conf`:
 ```bash
 enableMusicBrainzHelper="true"
 musicBrainzUsername="your_musicbrainz_username"
-musicBrainzOAuthClientId="your_installed_application_client_id"
-musicBrainzOAuthClientSecret="your_installed_application_client_secret"
+musicBrainzPassword="your_musicbrainz_digest_token"
 ```
 
-Register an Installed Application under MusicBrainz Account > Applications. Keep
-the default out-of-band callback, restart Lidarr so package version 0.5.0 is
-installed, then authorize once from the container:
+Generate the Digest token under MusicBrainz Account > Applications and use it as
+the password. The wrapper never places it in command arguments or reports.
+
+OAuth is an optional fallback. To use it, configure an Installed Application:
 
 ```bash
-bash /config/extended/MusicBrainzGenres.bash --authorize
+musicBrainzOAuthClientId="your_client_id"
+musicBrainzOAuthClientSecret="your_client_secret"
 ```
 
-Open the printed URL, approve `tag`, `rating`, and `profile` access, and paste the
-one-time code at the prompt. The helper stores a refresh token privately and renews
-access automatically. `musicBrainzToken` remains available only as a temporary
-Digest fallback; do not use your MusicBrainz website password.
+If no working Digest credential or OAuth grant is available, the worker prints an
+approval URL in Lidarr's logs. Open it and then complete the link once with
+`bash /config/extended/MusicBrainzGenres.bash --complete-authorization`. The helper
+stores the resulting refresh token and renews access automatically.
 
 This is the complete genre configuration. Keep `extended.conf` private, as with its
 other credentials. Setup includes the helper and its worker with the other

@@ -11,7 +11,7 @@ fi
 
 helper="musicbrainz-genres"
 queue="/config/extended/musicbrainz-helper"
-export MB_USERNAME="${musicBrainzUsername:-}" MB_TOKEN="${musicBrainzToken:-}"
+export MB_USERNAME="${musicBrainzUsername:-}" MB_TOKEN="${musicBrainzPassword:-${musicBrainzToken:-}}"
 export MB_OAUTH_CLIENT_ID="${musicBrainzOAuthClientId:-}"
 export MB_OAUTH_CLIENT_SECRET="${musicBrainzOAuthClientSecret:-}"
 export MB_OAUTH_REDIRECT_URI="${musicBrainzOAuthRedirectUri:-urn:ietf:wg:oauth:2.0:oob}"
@@ -32,12 +32,20 @@ if [ "${1:-}" = "--authorize" ]; then
     exec musicbrainz-auth authorize --token-file "$MB_OAUTH_TOKEN_FILE"
 fi
 
+if [ "${1:-}" = "--complete-authorization" ]; then
+    [ -n "$MB_OAUTH_CLIENT_ID" ] || { echo "MusicBrainz OAuth client ID is missing" >&2; exit 1; }
+    exec musicbrainz-auth complete --token-file "$MB_OAUTH_TOKEN_FILE"
+fi
+
 if [ "${1:-}" = "--work" ]; then
     arguments=(work --queue-dir "$queue" "${profileArguments[@]}")
     arguments+=(--entity artist --entity release-group --entity release --entity recording)
     if [ "${2:-}" != "--preview" ]; then
         # Credentials authorize contributions to this account; never submit anonymously.
         if { [ -z "$MB_USERNAME" ] || [ -z "$MB_TOKEN" ]; } && [ ! -s "$MB_OAUTH_TOKEN_FILE" ]; then
+            if [ -n "$MB_OAUTH_CLIENT_ID" ] && command -v musicbrainz-auth >/dev/null; then
+                musicbrainz-auth begin --new-only --token-file "$MB_OAUTH_TOKEN_FILE" >&2 || true
+            fi
             exit 0
         fi
         arguments+=(--submit)

@@ -106,6 +106,26 @@ class GenreWrapperTests(unittest.TestCase):
         self.assertIn("--token-file", trace)
         self.assertTrue(any(line.endswith("/musicbrainz-helper/oauth-tokens.json") for line in trace))
 
+    def test_missing_digest_credentials_prints_optional_oauth_link_once(self):
+        code, trace = self.run_wrapper(
+            arguments=("--work",), username="", password="",
+            extra_config='musicBrainzOAuthClientId="client-id"\n',
+            extra_helpers=("musicbrainz-auth",),
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("musicbrainz-auth", trace)
+        self.assertIn("begin", trace)
+        self.assertIn("--new-only", trace)
+
+    def test_complete_authorization_uses_pending_request(self):
+        code, trace = self.run_wrapper(
+            arguments=("--complete-authorization",),
+            extra_config='musicBrainzOAuthClientId="client-id"\n',
+            extra_helpers=("musicbrainz-auth",),
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("complete", trace)
+
     def test_lidarr_retag_event_queues_even_when_beets_is_enabled(self):
         code, trace = self.run_wrapper(beets="true", event="TrackRetag")
         self.assertEqual(code, 0)
