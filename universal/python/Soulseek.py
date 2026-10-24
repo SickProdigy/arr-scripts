@@ -33,6 +33,20 @@ def debug(message):
         print(message, flush=True)
 
 
+@contextmanager
+def api_lock(path):
+    """Serialize Arr API requests made by independent container workers."""
+    if not path or os.name == "nt":
+        yield
+        return
+    import fcntl
+    lock = Path(path)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with lock.open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
 def AudioPolicy(*args, **kwargs):
     """Load the Lidarr-only audio helper when music processing needs it."""
     import sys
@@ -64,6 +78,7 @@ class Api:
             raise ValueError("Missing API key")
         self.url, self.key, self.service = url.rstrip("/"), key, service
         self.opener = build_opener(NoRedirect())
+        self.lock_file = os.environ.get("ARR_API_LOCK_FILE", "/config/extended/arr-api.lock") if service == "Arr API" else None
 
     def delete(self, path, **query):
         return self.call(path, method="DELETE", **query)
@@ -74,9 +89,10 @@ class Api:
                           data=json.dumps(data).encode() if data is not None else None,
                           headers={"X-API-Key": self.key, "Content-Type": "application/json"})
         try:
-            with self.opener.open(request, timeout=30) as response:
-                raw = response.read()
-                return json.loads(raw) if raw else {}
+            with api_lock(self.lock_file):
+                with self.opener.open(request, timeout=30) as response:
+                    raw = response.read()
+                    return json.loads(raw) if raw else {}
         except HTTPError as error:
             status = error.code
             detail = None

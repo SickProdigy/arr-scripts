@@ -3,11 +3,28 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location("soulseek", Path(__file__).parents[1]/"python/Soulseek.py")
 soulseek = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(soulseek)
+
+
+class ApiLockTests(unittest.TestCase):
+    def test_arr_requests_use_shared_lock_but_client_requests_do_not(self):
+        arr = soulseek.Api("http://lidarr:8686", "test-key")
+        client = soulseek.SoulseekApi("http://nicotine:12339", "test-key", "nicotine")
+        self.assertEqual(arr.lock_file, "/config/extended/arr-api.lock")
+        self.assertIsNone(client.lock_file)
+
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{}'
+        arr.opener.open = MagicMock(return_value=response)
+        lock = MagicMock()
+        lock.return_value.__enter__.return_value = None
+        with patch.object(soulseek, "api_lock", lock):
+            self.assertEqual(arr.call("api/v1/system/status"), {})
+        lock.assert_called_once_with("/config/extended/arr-api.lock")
 
 
 class ReleaseGroupArr:

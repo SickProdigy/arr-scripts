@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="2.55"
+scriptVersion="2.56"
 scriptName="Audio"
 
 ### Import Settings
@@ -19,10 +19,30 @@ if [[ ! "$lidarrPageSize" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 CurlRequestOnce () {
+	local argument
+	local lidarrRequest="false"
+	local requestStatus
+	for argument in "$@"; do
+		if [ -n "${arrUrl:-}" ] && [[ "$argument" == "${arrUrl%/}/api/"* ]]; then
+			lidarrRequest="true"
+			break
+		fi
+	done
+	if [ "$lidarrRequest" = "true" ] && command -v flock >/dev/null 2>&1; then
+		mkdir -p /config/extended
+		exec 8>/config/extended/arr-api.lock
+		flock 8
+	fi
 	curl --silent --show-error --fail \
 		--connect-timeout "$networkConnectTimeout" \
 		--max-time "$networkMaxTime" \
 		"$@"
+	requestStatus=$?
+	if [ "$lidarrRequest" = "true" ] && command -v flock >/dev/null 2>&1; then
+		flock -u 8
+		exec 8>&-
+	fi
+	return "$requestStatus"
 }
 
 CurlRequest () {
