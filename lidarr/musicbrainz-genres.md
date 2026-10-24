@@ -12,19 +12,29 @@ Add these settings to your existing `/config/extended.conf`:
 ```bash
 enableMusicBrainzHelper="true"
 musicBrainzUsername="your_musicbrainz_username"
-musicBrainzToken="your_musicbrainz_application_token"
+musicBrainzOAuthClientId="your_installed_application_client_id"
+musicBrainzOAuthClientSecret="your_installed_application_client_secret"
 ```
 
-Create an application token under MusicBrainz Account > Applications. Use that
-token, not your website login password. The helper authenticates with your username
-and token using HTTP Digest over HTTPS.
+Register an Installed Application under MusicBrainz Account > Applications. Keep
+the default out-of-band callback, restart Lidarr so package version 0.5.0 is
+installed, then authorize once from the container:
+
+```bash
+bash /config/extended/MusicBrainzGenres.bash --authorize
+```
+
+Open the printed URL, approve `tag`, `rating`, and `profile` access, and paste the
+one-time code at the prompt. The helper stores a refresh token privately and renews
+access automatically. `musicBrainzToken` remains available only as a temporary
+Digest fallback; do not use your MusicBrainz website password.
 
 This is the complete genre configuration. Keep `extended.conf` private, as with its
 other credentials. Setup includes the helper and its worker with the other
 scripts; there is no separate container, mount, credentials file, profile setting
 or helper download to configure. Update the installed scripts and restart Lidarr
 when deploying this change. Setup preserves an existing `extended.conf`, so add
-these three settings to existing installations.
+these settings to existing installations.
 
 With `configureCustomScripts=true`, AutoConfig registers the import, upgrade and
 track-retag notification. When Beets is enabled, imports queue after Beets finishes

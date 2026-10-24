@@ -78,16 +78,18 @@ providers are `spotify` (`spotifyClientId`, `spotifyClientSecret`), `tidal`
 `discogsInheritAlbumRating="true"` allows album ratings to be applied to tracks).
 
 To contribute eligible ratings and genres to MusicBrainz too, enable the
-MusicBrainz helper and set your username and application token:
+MusicBrainz helper and configure a MusicBrainz Installed Application:
 
 ```bash
 enableMusicBrainzHelper="true"
 musicBrainzUsername="your_musicbrainz_user"
-musicBrainzToken="your_musicbrainz_application_token"
+musicBrainzOAuthClientId="your_client_id"
+musicBrainzOAuthClientSecret="your_client_secret"
 ```
 
-Create the token under MusicBrainz **Account > Applications**. Either tool can
-be enabled independently. Restart Lidarr after configuring.
+Restart Lidarr after configuring, then authorize once with
+`bash /config/extended/MusicBrainzGenres.bash --authorize`. Either tool can be
+enabled independently.
 
 Preview a backfill of your existing library, then apply it:
 

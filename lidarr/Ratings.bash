@@ -21,6 +21,10 @@ export TIDAL_CLIENT_ID="${tidalClientId:-}" TIDAL_CLIENT_SECRET="${tidalClientSe
 export DISCOGS_TOKEN="${discogsToken:-}"
 export RATINGS_SOURCE="${ratingsSource:-subsonic}"
 export MB_USERNAME="${musicBrainzUsername:-}" MB_TOKEN="${musicBrainzToken:-}"
+export MB_OAUTH_CLIENT_ID="${musicBrainzOAuthClientId:-}"
+export MB_OAUTH_CLIENT_SECRET="${musicBrainzOAuthClientSecret:-}"
+export MB_OAUTH_REDIRECT_URI="${musicBrainzOAuthRedirectUri:-urn:ietf:wg:oauth:2.0:oob}"
+export MB_OAUTH_TOKEN_FILE=/config/extended/musicbrainz-helper/oauth-tokens.json
 export RATINGS_SUBMIT="${enableMusicBrainzHelper:-false}"
 export RATINGS_INTERVAL="${ratingsScriptInterval:-15m}"
 export RATINGS_GENERATED_RATINGS_DIR=/config/extended/sonicratings
@@ -45,7 +49,8 @@ runHelper() {
     "$helper" "$@" || status=1
 }
 contribute() {
-    [ "${enableMusicBrainzHelper:-false}" = "true" ] && [ -n "$MB_USERNAME" ] && [ -n "$MB_TOKEN" ]
+    [ "${enableMusicBrainzHelper:-false}" = "true" ] && \
+        { { [ -n "$MB_USERNAME" ] && [ -n "$MB_TOKEN" ]; } || [ -s "$MB_OAUTH_TOKEN_FILE" ]; }
 }
 if [ "${1:-}" = "--work" ] || [ "${1:-}" = "--library" ]; then
     command=work

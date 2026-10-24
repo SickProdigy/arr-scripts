@@ -11,7 +11,7 @@ class HelperInstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             trace = root / "trace"
-            for name in ("uv", "python3", "musicbrainz-genres", "musicbrainz-ratings", "sonicratings"):
+            for name in ("uv", "python3", "musicbrainz-genres", "musicbrainz-ratings", "musicbrainz-auth", "sonicratings"):
                 (root / name).write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$0" "$@" >> "$TRACE"\n'
                                         'if [ "${0##*/}" = "python3" ]; then cat >/dev/null; fi\n'
                                         'exit "${FAKE_EXIT:-0}"\n', encoding="utf-8")
@@ -21,7 +21,7 @@ class HelperInstallerTests(unittest.TestCase):
             for key in ("ARR_HELPER_REPOSITORY_BASE", "ARR_SONICRATINGS_ENGINE_SOURCE", "ARR_MUSICBRAINZ_HELPER_SOURCE", "ARR_SONICRATINGS_SOURCE"):
                 environment.pop(key, None)
             environment.update(overrides or {})
-            for name in ("uv", "python3", "musicbrainz-genres", "musicbrainz-ratings", "sonicratings"):
+            for name in ("uv", "python3", "musicbrainz-genres", "musicbrainz-ratings", "musicbrainz-auth", "sonicratings"):
                 subprocess.run([BASH, "-c", 'chmod +x "$1"', "--", shell_path(root / name)],
                                env=environment, check=True, capture_output=True)
             result = subprocess.run([BASH, str(ROOT / "InstallHelpers.bash")],
@@ -31,7 +31,7 @@ class HelperInstallerTests(unittest.TestCase):
     def test_dependencies_default_to_pinned_pypi_packages(self):
         code, trace = self.run_installer()
         self.assertEqual(code, 0)
-        self.assertIn("musicbrainz-helper==0.4.0", trace)
+        self.assertIn("musicbrainz-helper==0.5.0", trace)
         self.assertIn("sonicratings==1.4.0", trace)
         self.assertFalse(any("git+" in line for line in trace))
         self.assertFalse(any("sonicratings-engine" in line for line in trace))
@@ -41,7 +41,7 @@ class HelperInstallerTests(unittest.TestCase):
     def test_arr_source_owner_does_not_redirect_helper_dependencies(self):
         code, trace = self.run_installer(raw="https://raw.githubusercontent.com/owner/arr-scripts/main")
         self.assertEqual(code, 0)
-        self.assertIn("musicbrainz-helper==0.4.0", trace)
+        self.assertIn("musicbrainz-helper==0.5.0", trace)
 
     def test_explicit_local_sources_are_supported(self):
         code, trace = self.run_installer(raw="https://example.test/unusual", overrides={
@@ -57,7 +57,7 @@ class HelperInstallerTests(unittest.TestCase):
     def test_obsolete_repository_base_is_ignored_and_failed_install_fails_closed(self):
         code, trace = self.run_installer(overrides={"ARR_HELPER_REPOSITORY_BASE": "https://forge.example.test/owner"})
         self.assertEqual(code, 0)
-        self.assertIn("musicbrainz-helper==0.4.0", trace)
+        self.assertIn("musicbrainz-helper==0.5.0", trace)
         self.assertIn("sonicratings==1.4.0", trace)
         self.assertFalse(any("forge.example.test" in line for line in trace))
         code, trace = self.run_installer(fail=True)
