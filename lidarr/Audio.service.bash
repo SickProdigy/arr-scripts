@@ -953,6 +953,10 @@ DownloadProcess () {
 		NotifyLidarrForImport "$importPath/$downloadedAlbumFolder"
 		lidarrDownloadImportNotfication="true"
 		LidarrTaskStatusCheck
+		if [ -f /config/extended/python/ReleaseGroups.py ]; then
+			python3 /config/extended/python/ReleaseGroups.py --apply --album-id "$wantedAlbumId" --set-group "$releaseGroup" \
+				|| log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: WARNING :: Unable to persist $releaseGroup release group"
+		fi
 	fi
 
 	if [ -d "$audioPath/complete/$downloadedAlbumFolder" ]; then
@@ -1835,7 +1839,7 @@ NormalizeArtistName () {
 	python3 -c 'import sys, unicodedata; print("".join(c for c in unicodedata.normalize("NFKC", sys.argv[1]).casefold() if c.isalnum()))' "$1"
 }
 
-TidalArtistMatchesLidarr () {
+StreamingPrimaryArtistMatchesLidarr () {
 	local expectedArtist
 	local candidateArtist
 	local normalizedCandidateArtist
@@ -1847,14 +1851,10 @@ TidalArtistMatchesLidarr () {
 
 	expectedArtist=$(NormalizeArtistName "$lidarrArtistName") || return 1
 	[ -n "$expectedArtist" ] || return 1
-	while IFS= read -r candidateArtist; do
-		normalizedCandidateArtist=$(NormalizeArtistName "$candidateArtist") || continue
-		if [ -n "$normalizedCandidateArtist" ] && [ "$normalizedCandidateArtist" == "$expectedArtist" ]; then
-			return 0
-		fi
-	done < <(echo "$1" | jq -r '[.artist.name, (.artists[]?.name)] | map(select(. != null and . != "")) | unique[]')
-
-	return 1
+	candidateArtist=$(echo "$1" | jq -r '.artist.name // empty') || return 1
+	[ -n "$candidateArtist" ] || return 1
+	normalizedCandidateArtist=$(NormalizeArtistName "$candidateArtist") || return 1
+	[ "$normalizedCandidateArtist" == "$expectedArtist" ]
 }
 
 TitleDistanceIsAcceptable () {
@@ -1959,6 +1959,11 @@ ArtistDeezerSearch () {
 			continue
 		fi
 		deezerAlbumData="$(cat "/config/extended/cache/deezer/$deezerAlbumID.json")"
+		if ! StreamingPrimaryArtistMatchesLidarr "$deezerAlbumData"; then
+			deezerCandidateArtist=$(echo "$deezerAlbumData" | jq -r '.artist.name // "unknown"')
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Deezer :: $type :: $lidarrReleaseTitle :: Primary artist mismatch ($lidarrArtistName vs $deezerCandidateArtist); skipping candidate..."
+			continue
+		fi
 		deezerAlbumTrackCount="$(echo "$deezerAlbumData" | jq -r .nb_tracks)"
 		deezerAlbumExplicitLyrics="$(echo "$deezerAlbumData" | jq -r .explicit_lyrics)"								
 		downloadedReleaseDate="$(echo "$deezerAlbumData" | jq -r .release_date)"
@@ -2045,6 +2050,11 @@ FuzzyDeezerSearch () {
 				continue
 			fi
 			deezerAlbumData="$(cat "/config/extended/cache/deezer/$deezerAlbumID.json")"
+			if ! StreamingPrimaryArtistMatchesLidarr "$deezerAlbumData"; then
+				deezerCandidateArtist=$(echo "$deezerAlbumData" | jq -r '.artist.name // "unknown"')
+				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Deezer :: $type :: $lidarrReleaseTitle :: Primary artist mismatch ($lidarrArtistName vs $deezerCandidateArtist); skipping candidate..."
+				continue
+			fi
 			deezerAlbumTrackCount="$(echo "$deezerAlbumData" | jq -r .nb_tracks)"
 			deezerAlbumExplicitLyrics="$(echo "$deezerAlbumData" | jq -r .explicit_lyrics)"								
 			downloadedReleaseDate="$(echo "$deezerAlbumData" | jq -r .release_date)"
@@ -2123,6 +2133,11 @@ ArtistTidalSearch () {
 	for tidalArtistAlbumId in $(echo $tidalArtistAlbumsIds); do
 			
 		tidalArtistAlbumData=$(echo "$tidalArtistAlbumsData" | jq -r "select(.id=="$tidalArtistAlbumId")")
+		if ! StreamingPrimaryArtistMatchesLidarr "$tidalArtistAlbumData"; then
+			tidalCandidateArtist=$(echo "$tidalArtistAlbumData" | jq -r '.artist.name // "unknown"')
+			log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Artist Search :: Tidal :: $type :: $lidarrReleaseTitle :: Primary artist mismatch ($lidarrArtistName vs $tidalCandidateArtist); skipping candidate..."
+			continue
+		fi
 		downloadedAlbumTitle="$(echo ${tidalArtistAlbumData} | jq -r .title)"
 		tidalAlbumTitleClean=$(echo ${downloadedAlbumTitle} | sed -e "s%[^[:alpha:][:digit:]]%%g" -e "s/  */ /g" | sed 's/^[.]*//' | sed  's/[.]*$//g' | sed  's/^ *//g' | sed 's/ *$//g')
   		tidalAlbumTitleClean="${tidalAlbumTitleClean:0:130}"
@@ -2187,9 +2202,9 @@ FuzzyTidalSearch () {
 	if [ ! -z "$tidalSearch" ]; then
 		for tidalAlbumID in $(echo "$tidalSearch" | jq -r .id | sort -u); do
 			tidalAlbumData="$(echo "$tidalSearch" | jq -r "select(.id==$tidalAlbumID)")"
-			if ! TidalArtistMatchesLidarr "$tidalAlbumData"; then
-				tidalCandidateArtists=$(echo "$tidalAlbumData" | jq -r '[.artist.name, (.artists[]?.name)] | map(select(. != null and . != "")) | unique | join(", ")')
-				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: Artist mismatch ($lidarrArtistName vs $tidalCandidateArtists); skipping candidate..."
+			if ! StreamingPrimaryArtistMatchesLidarr "$tidalAlbumData"; then
+				tidalCandidateArtist=$(echo "$tidalAlbumData" | jq -r '.artist.name // "unknown"')
+				log "$1 :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Fuzzy Search :: Tidal :: $type :: $lidarrReleaseTitle :: Primary artist mismatch ($lidarrArtistName vs $tidalCandidateArtist); skipping candidate..."
 				continue
 			fi
 			tidalAlbumTitle=$(echo "$tidalAlbumData"| jq -r .title)

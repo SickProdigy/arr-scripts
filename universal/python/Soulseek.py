@@ -44,9 +44,10 @@ def AudioPolicy(*args, **kwargs):
 
 
 class ApiError(RuntimeError):
-    def __init__(self, status=0, service="API"):
+    def __init__(self, status=0, service="API", detail=None):
         self.status = status
-        super().__init__(f"{service} HTTP {status}" if status else f"{service} unavailable")
+        message = f"{service} HTTP {status}" if status else f"{service} unavailable"
+        super().__init__(f"{message}: {detail}" if detail else message)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -78,8 +79,24 @@ class Api:
                 return json.loads(raw) if raw else {}
         except HTTPError as error:
             status = error.code
+            detail = None
+            if self.service == "Nicotine API":
+                try:
+                    candidate = json.loads(error.read(4096)).get("error")
+                except (ValueError, UnicodeError, AttributeError):
+                    candidate = None
+                safe_details = {
+                    "Transfer belongs to another download",
+                    "Invalid owned incomplete path",
+                    "Incomplete file changed or shared",
+                    "Batch still has active or queued transfers",
+                    "Batch UUID already exists",
+                    "Not found",
+                }
+                if candidate in safe_details:
+                    detail = candidate
             error.close()
-            raise ApiError(status, self.service) from None
+            raise ApiError(status, self.service, detail) from None
         except (URLError, TimeoutError, OSError, ValueError):
             raise ApiError(service=self.service) from None
 
@@ -218,9 +235,52 @@ def import_payload(app, target, decisions, folder):
     return {"name": "ManualImport", "files": files, "importMode": "copy"} if files else None
 
 
+def persist_release_group(arr, files, group="Soulseek"):
+    """Persist a known provider only when Lidarr left the field blank."""
+    for track_file in files:
+        if track_file.get("releaseGroup"):
+            continue
+        updated = dict(track_file)
+        updated["releaseGroup"] = group
+        arr.call(f"api/v1/trackfile/{track_file['id']}", updated, method="PUT")
+
+
+DEFAULT_MUSIC_RELEASE_GROUPS = (
+    "CUSTODES", "ESGFLAC", "MTD", "MUSiC4DE", "PERFECT", "DeVOiD",
+    "NBFLAC", "Mrflac", "VOLDiES", "TiLLMYDEATH", "BriBerY", "FATHEAD",
+    "FWYH", "LoKET", "MAHOU", "SCORN", "SMASH", "WRE", "YARD",
+    "psyCZ", "FiH",
+)
+
+
+def infer_music_release_group(files, configured=None, mode="extend"):
+    """Return a recognized trailing scene group from remote folders or files."""
+    if mode not in ("extend", "replace"):
+        raise ValueError("Soulseek release-group mode must be extend or replace")
+    custom = tuple(configured or ())
+    groups = custom if mode == "replace" else DEFAULT_MUSIC_RELEASE_GROUPS + custom
+    known = {group.casefold(): group for group in groups if group}
+    for item in files:
+        remote = PureWindowsPath(item.get("filename", ""))
+        candidates = list(reversed(remote.parts[:-1])) + [remote.stem]
+        for candidate in candidates:
+            match = re.search(r"(?:^|[-_.\s(\[{])([A-Za-z0-9]+)[])}\s]*$", candidate)
+            if match and match.group(1).casefold() in known:
+                return known[match.group(1).casefold()]
+    return None
+
+
+def compact_target(target):
+    """Keep durable job identity small; track details are refreshed from Arr."""
+    return {key: value for key, value in target.items()
+            if key not in ("tracks", "missingTrackIds")}
+
+
 class Worker:
-    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=30, notfound_days=90, offline_delay=900, offline_grace=86400, max_batches=3, max_foreground_batches=None, search_retry_days=7):
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=30, notfound_days=90, offline_delay=900, offline_grace=86400, max_batches=3, max_foreground_batches=None, search_retry_days=7, release_groups=None, release_group_mode="extend"):
         self.failure_search_seconds = max(0,int(search_retry_days))*86400
+        self.release_groups = release_groups
+        self.release_group_mode = release_group_mode
         self.offline_delay = max(0,int(offline_delay))
         self.offline_grace = max(self.offline_delay,int(offline_grace))
         self.max_batches = max(1,min(10,int(max_batches)))
@@ -242,6 +302,26 @@ class Worker:
         self.db.execute("INSERT OR IGNORE INTO scan(id,page) VALUES(1,1)")
         self.db.execute("CREATE TABLE IF NOT EXISTS failed_candidates (id INTEGER NOT NULL, fingerprint TEXT NOT NULL, expires REAL NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(id,fingerprint))")
         self.db.execute("CREATE TABLE IF NOT EXISTS background_batches (batch TEXT PRIMARY KEY, id INTEGER NOT NULL, target TEXT NOT NULL, data TEXT NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        if not self.db.execute("SELECT 1 FROM schema_meta WHERE key='compact_targets_v1'").fetchone():
+            rows = self.db.execute("SELECT id,target FROM jobs").fetchall()
+            self.db.executemany("UPDATE jobs SET target=? WHERE id=?", (
+                (json.dumps(compact_target(json.loads(row["target"]))), row["id"])
+                for row in rows
+            ))
+            self.db.execute("INSERT INTO schema_meta VALUES('compact_targets_v1','1')")
+        # Older workers moved a temporarily busy Nicotine cleanup to permanent
+        # review after only three attempts. Give that exact condition one
+        # bounded recovery cycle after upgrade without weakening file checks.
+        for row in self.db.execute("SELECT id,data FROM jobs WHERE state='review'").fetchall():
+            data = json.loads(row["data"])
+            if (data.get("cleanupError") == "Nicotine API HTTP 409"
+                    and data.get("reason", "").startswith("cleanup failed three times")
+                    and not data.get("cleanupRecoveryVersion")):
+                data.update(cleanupAttempts=0, cleanupRecoveryVersion=1)
+                self.db.execute("UPDATE jobs SET state='failure_cleanup',next_run=0,data=? WHERE id=?",
+                                (json.dumps(data), row["id"]))
+        self.db.execute("DELETE FROM failed_candidates WHERE expires<=?", (self.clock(),))
         self.db.commit()
 
     @staticmethod
@@ -277,10 +357,11 @@ class Worker:
         attempts = data.get("cleanupAttempts", 0) + 1
         detail = str(error) if isinstance(error, (ApiError, ValueError)) and str(error) else type(error).__name__
         data = {**data, "cleanupAttempts": attempts, "cleanupError": detail}
-        if attempts >= 3:
-            self.retain_for_review(ident, data, "cleanup failed three times; inspect retained files")
+        limit = 12 if isinstance(error, ApiError) and error.status == 409 and "Nicotine" in detail else 3
+        if attempts >= limit:
+            self.retain_for_review(ident, data, f"cleanup failed {limit} times; inspect retained files")
         else:
-            print(f"Soulseek {self.app}: item {ident}: cleanup {detail}; retry {attempts}/3", flush=True)
+            print(f"Soulseek {self.app}: item {ident}: cleanup {detail}; retry {attempts}/{limit}", flush=True)
             self.save(ident, state, data, 300)
 
     def next_candidate(self, ident, data):
@@ -583,6 +664,7 @@ class Worker:
                 if not track.get("trackFileId"):
                     raise ValueError("Imported track missing")
                 library.append(self.arr.call(self.prefix+f"trackfile/{track['trackFileId']}"))
+            persist_release_group(self.arr, library, data.get("releaseGroup", "Soulseek"))
         else:
             kind = "movie" if self.app == "radarr" else "episode"
             item = self.arr.call(self.prefix+f"{kind}/{target['id']}")
@@ -648,8 +730,11 @@ class Worker:
                            for field in client.get("fields", [])) for client in clients):
             raise ValueError("Enable a Usenet Blackhole client watching importPath")
         decisions = self.arr.call(self.prefix+"manualimport", folder=str(folder), filterExistingFiles="true")
-        groups = {item.get("releaseGroup") for item in decisions if item.get("releaseGroup")}
-        group = next(iter(groups)) if len(groups) == 1 else "Soulseek"
+        groups = {item.get("releaseGroup") for item in decisions
+                  if item.get("releaseGroup") not in (None, "", "Lidarr", "Soulseek")}
+        group = next(iter(groups)) if len(groups) == 1 else infer_music_release_group(
+            data.get("files", []), self.release_groups, self.release_group_mode) or "Soulseek"
+        data["releaseGroup"] = group
         def clean(value):
             return re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(value)).strip(' .')[:100] or "Unknown"
         year = str(target.get("releaseDate", ""))[:4]
@@ -871,7 +956,7 @@ class Worker:
             targets.update({t["id"]: t for t in self.targets([record])})
         with self.db:
             for ident, target in targets.items():
-                self.db.execute("INSERT INTO jobs(id,target,first_seen) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET target=excluded.target,state=CASE WHEN jobs.state='done' THEN 'waiting' ELSE jobs.state END", (ident, json.dumps(target), now))
+                self.db.execute("INSERT INTO jobs(id,target,first_seen) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET target=excluded.target,state=CASE WHEN jobs.state='done' THEN 'waiting' ELSE jobs.state END", (ident, json.dumps(compact_target(target)), now))
             self.db.execute("UPDATE scan SET page=? WHERE id=1", (next_page,))
         print(f"Soulseek {self.app}: wanted page {page}; {len(records)} of {total} items; {len(targets)} eligible", flush=True)
         # Only absence from a refreshed record proves completion; absence from a
@@ -1109,7 +1194,9 @@ def main():
                         retry_days=os.environ.get("SOULSEEK_FAILED_RETRY_DAYS","30"), search_retry_days=os.environ.get("SOULSEEK_FAILED_SEARCH_DAYS","7"),
                         offline_delay=os.environ.get("SOULSEEK_OFFLINE_DELAY","900"), offline_grace=os.environ.get("SOULSEEK_OFFLINE_GRACE","86400"), max_batches=os.environ.get("SOULSEEK_MAX_BATCHES","3"), max_foreground_batches=os.environ.get("SOULSEEK_MAX_FOREGROUND_BATCHES"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
                         audio_policy=AudioPolicy(os.environ.get("SOULSEEK_AUDIO_FORMAT", "native"), os.environ.get("SOULSEEK_AUDIO_BITRATE", "master"), os.environ.get("SOULSEEK_REQUIRE_QUALITY") == "true") if app == "lidarr" else None,
-                        imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None)
+                        imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None,
+                        release_groups=tuple(group.strip() for group in os.environ.get("SOULSEEK_RELEASE_GROUPS", "").split(",") if group.strip()),
+                        release_group_mode=os.environ.get("SOULSEEK_RELEASE_GROUP_MODE", "extend").strip().casefold())
         try:
             if args.discard is not None:
                 worker.discard(args.discard, cancelled=args.cancelled)

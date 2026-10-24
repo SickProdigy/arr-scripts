@@ -99,6 +99,16 @@ bash /config/extended/Ratings.bash --library
 
 The background service keeps processing new imports while a manual preview runs.
 
+### Preserve download-source names
+
+arr-scripts stores `Deezer`, `Tidal`, `Soulseek`, or `Deemix` in Lidarr's release-group field so **Organize & Rename** keeps that source at the end of the filename. To preview repairs for existing files whose trusted source is already present in the filename:
+
+```bash
+python3 /config/extended/python/ReleaseGroups.py
+```
+
+Review the output, then apply the metadata repairs with `--apply`. This changes Lidarr's stored release group; it does not rename files.
+
 ## Updating
 
 Updating is a bit more cumbersome. To update, do the following:

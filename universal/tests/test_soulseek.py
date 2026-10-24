@@ -10,6 +10,53 @@ soulseek = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(soulseek)
 
 
+class ReleaseGroupArr:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, path, data=None, method=None, **query):
+        self.calls.append((path, data, method, query))
+        return data or {}
+
+
+class ReleaseGroupPersistenceTests(unittest.TestCase):
+    def test_sets_only_blank_release_groups(self):
+        arr = ReleaseGroupArr()
+        files = [{"id": 1, "path": "/music/a.flac"},
+                 {"id": 2, "path": "/music/b.flac", "releaseGroup": "Original"}]
+        soulseek.persist_release_group(arr, files)
+        self.assertEqual(len(arr.calls), 1)
+        self.assertEqual(arr.calls[0][0], "api/v1/trackfile/1")
+        self.assertEqual(arr.calls[0][1]["releaseGroup"], "Soulseek")
+        self.assertEqual(arr.calls[0][2], "PUT")
+
+    def test_compact_target_removes_refreshable_track_arrays(self):
+        target = {"id": 7, "artist": "Artist", "title": "Album",
+                  "tracks": [{"id": 1}], "missingTrackIds": [1]}
+        self.assertEqual(soulseek.compact_target(target),
+                         {"id": 7, "artist": "Artist", "title": "Album"})
+
+    def test_infers_known_group_from_remote_folder_then_filename(self):
+        files = [{"filename": r"Artist-Album-2020-CUSTODES\01-Track.flac"}]
+        self.assertEqual(soulseek.infer_music_release_group(files), "CUSTODES")
+        files = [{"filename": r"Artist Album\01-Track-DeVOiD.flac"}]
+        self.assertEqual(soulseek.infer_music_release_group(files), "DeVOiD")
+
+    def test_requires_recognized_trailing_token(self):
+        files = [{"filename": r"PERFECT Artist\01-A Perfect Song.flac"}]
+        self.assertIsNone(soulseek.infer_music_release_group(files))
+        self.assertEqual(soulseek.infer_music_release_group(
+            [{"filename": r"Artist-Album-ACME\track.flac"}], ("ACME",)), "ACME")
+
+    def test_custom_groups_extend_or_replace_builtins(self):
+        builtin = [{"filename": r"Artist-Album-CUSTODES\track.flac"}]
+        custom = [{"filename": r"Artist-Album-ACME\track.flac"}]
+        self.assertEqual(soulseek.infer_music_release_group(builtin, ("ACME",)), "CUSTODES")
+        self.assertEqual(soulseek.infer_music_release_group(custom, ("ACME",)), "ACME")
+        self.assertIsNone(soulseek.infer_music_release_group(builtin, ("ACME",), "replace"))
+        self.assertEqual(soulseek.infer_music_release_group(custom, ("ACME",), "replace"), "ACME")
+
+
 def response(names):
     return [{"username": "test-peer", "files": [{"filename": name, "size": 4} for name in names]}]
 
@@ -225,6 +272,17 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(source.exists())
         self.assertEqual(self.row()["state"],"failure_cleanup")
 
+    def test_nicotine_busy_cleanup_gets_bounded_extended_retries(self):
+        self.tick()
+        data = {"cleanupAttempts": 2}
+        self.worker.defer_cleanup(1, "failure_cleanup", data, soulseek.ApiError(409, "Nicotine API"))
+        self.assertEqual(self.row()["state"], "failure_cleanup")
+        saved = json.loads(self.row()["data"])
+        self.assertEqual(saved["cleanupAttempts"], 3)
+        data["cleanupAttempts"] = 11
+        self.worker.defer_cleanup(1, "failure_cleanup", data, soulseek.ApiError(409, "Nicotine API"))
+        self.assertEqual(self.row()["state"], "review")
+
     def test_failed_cleanup_clears_client_before_file_removal(self):
         self.tick()
         batch = str(soulseek.uuid.uuid4())
@@ -264,6 +322,8 @@ class WorkerTests(unittest.TestCase):
     def test_api_errors_identify_the_failed_service(self):
         self.assertEqual(str(soulseek.ApiError(service="Lidarr API")), "Lidarr API unavailable")
         self.assertEqual(str(soulseek.ApiError(404, "Nicotine API")), "Nicotine API HTTP 404")
+        self.assertEqual(str(soulseek.ApiError(409, "Nicotine API", "Batch still has active or queued transfers")),
+                         "Nicotine API HTTP 409: Batch still has active or queued transfers")
 
     def test_version_and_disconnection_prevent_searches(self):
         self.slsk.version = "0.25.1"
@@ -416,7 +476,7 @@ class WorkerTests(unittest.TestCase):
                     if path.endswith("track"):
                         return [{"id": 3, "trackFileId": 4}]
                     if "/trackfile/" in path:
-                        return {"path": str(library)}
+                        return {"id": 4, "path": str(library)}
                     kind = "movie" if app == "radarr" else "episode"
                     return {"hasFile": True, kind+"File": {"path": str(library)}}
                 self.arr.call = call
@@ -713,6 +773,12 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual((published/"Song.flac").read_bytes(),b"test")
         self.assertFalse(self.folder.exists())
         self.assertEqual(self.arr.commands,[{"name":"RefreshMonitoredDownloads"}])
+
+    def test_handoff_uses_known_remote_folder_group_when_lidarr_has_none(self):
+        self.data["files"][0]["filename"] = r"Artist-Album-2020-CUSTODES\Song.flac"
+        self.worker.handoff(self.target,self.data,self.folder)
+        self.assertEqual(Path(self.data["handoff"]).name,"Artist-Album (2020) [CUSTODES]")
+        self.assertEqual(self.data["releaseGroup"],"CUSTODES")
         self.assertEqual(self.worker.db.execute("SELECT state FROM jobs").fetchone()[0],"handoff")
 
     def test_default_group_and_same_name_collision_never_overwrite(self):
@@ -746,7 +812,7 @@ class HandoffTests(unittest.TestCase):
             if path.endswith("track"):
                 return [{"id":3,"trackFileId":4}]
             if path.endswith("trackfile/4"):
-                return {"path":str(library)}
+                return {"id":4,"path":str(library)}
             return original(path,*args,**kwargs)
         self.arr.call = call
         self.worker.cleanup_handoff(self.target,self.data)

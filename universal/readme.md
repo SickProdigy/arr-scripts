@@ -227,8 +227,12 @@ recovery finishes, preventing a stack of additional rejected downloads. Tidal an
 The blackhole client does not report Nicotine's live transfer/start status.
 
 Folders use `Artist-Album (Year) [Soulseek]` unless Lidarr recognizes an existing
-release group, which is preserved instead. Library filenames show that group
-when it is included in Lidarr's renaming format. There is only one completed
+release group. When Lidarr has none, the worker also checks the original remote
+folder and filenames for a built-in list of common music release groups. Add
+names with `soulseekReleaseGroups`; the default `soulseekReleaseGroupMode="extend"`
+keeps the built-ins, while `replace` treats your list as the complete allowlist.
+Library filenames show the selected group when it is included in Lidarr's
+renaming format. There is only one completed
 copy after a successful handoff; temporary staging copies are removed from the
 Soulseek batch. The worker verifies final library files before cleaning any
 remaining handed-off files. Personal downloads and unknown files are preserved.
