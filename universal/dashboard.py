@@ -84,6 +84,20 @@ def _shell_quote(value):
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def backup_configuration(path, keep=5):
+    path = Path(path)
+    backup_dir = STATE_DIR / "backups" / path.name
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    backup = backup_dir / (path.name + "." + stamp + ".bak")
+    shutil.copy2(path, backup)
+    existing = sorted(backup_dir.glob(path.name + ".*.bak"),
+                      key=lambda item: item.stat().st_mtime, reverse=True)
+    for old in existing[keep:]:
+        old.unlink()
+    return backup
+
+
 def configuration_fields(path=CONFIG):
     values = read_config(path)
     comments = {}
@@ -140,8 +154,7 @@ def update_configuration(changes, path=CONFIG):
         _, comment = _split_comment(line)
         suffix = (" " + comment) if comment else ""
         output.append(f"{match.group(1)}{match.group(2)}={_shell_quote(normalized[match.group(2)])}{suffix}")
-    backup = path.with_name(path.name + ".dashboard-" + time.strftime("%Y%m%d-%H%M%S") + ".bak")
-    shutil.copy2(path, backup)
+    backup = backup_configuration(path)
     staged = path.with_suffix(path.suffix + ".tmp")
     staged.write_text("\n".join(output) + "\n", encoding="utf-8", newline="\n")
     os.replace(staged, path)
@@ -169,8 +182,7 @@ def update_auxiliary_configuration(name, content):
     path, _ = entry
     if not path.is_file():
         raise ValueError("Configuration file is unavailable")
-    backup = path.with_name(path.name + ".dashboard-" + time.strftime("%Y%m%d-%H%M%S") + ".bak")
-    shutil.copy2(path, backup)
+    backup = backup_configuration(path)
     staged = path.with_suffix(path.suffix + ".tmp")
     staged.write_text(content.rstrip("\r\n") + "\n", encoding="utf-8", newline="\n")
     os.replace(staged, path)

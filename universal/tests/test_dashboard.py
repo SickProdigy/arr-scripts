@@ -48,23 +48,30 @@ class DashboardTests(unittest.TestCase):
 
     def test_configuration_masks_secrets_and_preserves_layout_on_save(self):
         with tempfile.TemporaryDirectory() as directory:
+            old_state = DASHBOARD.STATE_DIR
+            DASHBOARD.STATE_DIR = Path(directory) / "dashboard"
             config = Path(directory) / "extended.conf"
             config.write_text('enableDashboard="true" # enabled\ndashboardPassword=\'old$secret\' # hidden\n', encoding="utf-8")
-            groups = DASHBOARD.configuration_fields(config)
-            fields = {field["name"]: field for group in groups for field in group["fields"]}
-            self.assertEqual(fields["dashboardPassword"]["value"], "")
-            self.assertTrue(fields["dashboardPassword"]["configured"])
-            backup = DASHBOARD.update_configuration({"enableDashboard": "false", "dashboardPassword": "new'password"}, config)
-            self.assertTrue(backup.is_file())
-            self.assertEqual(DASHBOARD.read_config(config)["dashboardPassword"], "new'password")
-            self.assertIn("# enabled", config.read_text())
+            try:
+                groups = DASHBOARD.configuration_fields(config)
+                fields = {field["name"]: field for group in groups for field in group["fields"]}
+                self.assertEqual(fields["dashboardPassword"]["value"], "")
+                self.assertTrue(fields["dashboardPassword"]["configured"])
+                backup = DASHBOARD.update_configuration({"enableDashboard": "false", "dashboardPassword": "new'password"}, config)
+                self.assertTrue(backup.is_file())
+                self.assertEqual(backup.parent, DASHBOARD.STATE_DIR / "backups" / "extended.conf")
+                self.assertEqual(DASHBOARD.read_config(config)["dashboardPassword"], "new'password")
+                self.assertIn("# enabled", config.read_text())
+            finally:
+                DASHBOARD.STATE_DIR = old_state
 
     def test_auxiliary_configuration_is_allowlisted_and_backed_up(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "beets.yaml"
             path.write_text("plugins: musicbrainz\n", encoding="utf-8")
-            old = DASHBOARD.CONFIG_FILES
+            old, old_state = DASHBOARD.CONFIG_FILES, DASHBOARD.STATE_DIR
             DASHBOARD.CONFIG_FILES = {"beets-download": (path, "Beets - download processing")}
+            DASHBOARD.STATE_DIR = Path(directory) / "dashboard"
             try:
                 self.assertEqual(DASHBOARD.auxiliary_configuration("beets-download")["content"], "plugins: musicbrainz\n")
                 backup = DASHBOARD.update_auxiliary_configuration("beets-download", "plugins: musicbrainz chroma\n")
@@ -74,6 +81,21 @@ class DashboardTests(unittest.TestCase):
                     DASHBOARD.auxiliary_configuration("../../secret")
             finally:
                 DASHBOARD.CONFIG_FILES = old
+                DASHBOARD.STATE_DIR = old_state
+
+    def test_configuration_backups_are_limited_to_five(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_state = DASHBOARD.STATE_DIR
+            DASHBOARD.STATE_DIR = Path(directory) / "dashboard"
+            path = Path(directory) / "config.yaml"
+            path.write_text("value: one\n", encoding="utf-8")
+            try:
+                for _ in range(7):
+                    DASHBOARD.backup_configuration(path)
+                backups = list((DASHBOARD.STATE_DIR / "backups" / path.name).glob("*.bak"))
+                self.assertEqual(len(backups), 5)
+            finally:
+                DASHBOARD.STATE_DIR = old_state
 
     def test_interface_includes_overview_ratings_and_beets_editors(self):
         self.assertIn('data-page="overview"', DASHBOARD.HTML)
