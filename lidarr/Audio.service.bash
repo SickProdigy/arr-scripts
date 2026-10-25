@@ -357,8 +357,8 @@ Configuration () {
 		log "Beets Matching Threshold ${beetsMatchPercentage}%"
 		beetsMatchThreshold=$(awk "BEGIN { printf \"%.2f\", (100 - ${beetsMatchPercentage}) / 100 }")
 		log "Configuring Beets matching distance ${beetsMatchThreshold}"
-		if [ -f /config/extended/beets-config-lidarr.yaml ]; then
-			sed -Ei "s/^([[:space:]]*strong_rec_thresh:).*/\\1 ${beetsMatchThreshold}/" /config/extended/beets-config-lidarr.yaml
+		if [ -f /config/extended/beets-config.yaml ]; then
+			sed -Ei "s/^([[:space:]]*strong_rec_thresh:).*/\\1 ${beetsMatchThreshold}/" /config/extended/beets-config.yaml
 		fi
 	else
 		log "Beets Tagging Disabled"

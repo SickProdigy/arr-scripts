@@ -68,7 +68,7 @@ ProcessWithBeets () {
 	sleep 0.5
 
         log "$1 :: Begin matching with beets!"
-	BEETSDIR=/config/extended beet -P lyrics -c /config/extended/beets-config-lidarr.yaml -l /config/extended/library-lidarr.blb -d "$1" import -qC "$1" 2>&1 | tee -a "/config/logs/$logFileName"
+	BEETSDIR=/config/extended beet -P lyrics -c /config/extended/beets-config.yaml -l /config/extended/library-lidarr.blb -d "$1" import -qC "$1" 2>&1 | tee -a "/config/logs/$logFileName"
 	beetsImportStatus=${PIPESTATUS[0]}
 	if [ "$beetsImportStatus" = "0" ]; then
 		bash /config/extended/Lyrics.bash "$1" "${lidarr_album_id:-}" 2>&1 | tee -a "/config/logs/$logFileName"
