@@ -137,6 +137,14 @@ def normalized(value):
     return " ".join(re.findall(r"[^\W_]+", value, re.UNICODE))
 
 
+def staging_destination(app, label, batch):
+    """Build a readable, API-safe folder while the UUID remains authoritative."""
+    readable = unicodedata.normalize("NFKD", str(label)).encode("ascii", "ignore").decode()
+    readable = " ".join(re.sub(r"[^A-Za-z0-9_. -]+", " ", readable).split()).strip(" .")
+    readable = readable[:120].rstrip(" .") or "Unknown item"
+    return f"{app}/{readable} - {batch[:8]}"
+
+
 def released(value, now):
     if not value:
         return False
@@ -401,9 +409,10 @@ class Worker:
             names = [PureWindowsPath(f["filename"]).name.casefold() for f in candidate["files"]]
             if len(names) != len(set(names)) or self.excluded(ident, candidate):
                 continue
-            next_data = {k:data[k] for k in ("search","audioPolicy","attempted") if k in data}
+            next_data = {k:data[k] for k in ("search","label","audioPolicy","attempted") if k in data}
             next_data.update(candidate, candidates=candidates, batch=str(uuid.uuid4()))
-            next_data["destination"] = next_data["batch"]
+            next_data["destination"] = staging_destination(
+                self.app, next_data.get("label", f"Item {ident}"), next_data["batch"])
             debug(f"Soulseek {self.app}: item {ident}: selected candidate with {len(candidate['files'])} files; {len(candidates)} alternates remain")
             self.save(ident, "enqueueing", next_data)
             return
@@ -658,10 +667,13 @@ class Worker:
         batch = str(uuid.UUID(data["batch"]))
         if batch != data["batch"]:
             raise ValueError("Invalid batch directory")
-        # New jobs use a flat destination. Keep existing transfer intents valid
-        # until their already queued downloads can finish or be discarded.
-        destination = data.get("destination", f"arr-scripts/{self.app}/{batch}")
-        if destination not in (batch, f"arr-scripts/{self.app}/{batch}"):
+        # Keep both older layouts valid until their queued downloads finish.
+        legacy = f"arr-scripts/{self.app}/{batch}"
+        destination = data.get("destination", legacy)
+        allowed = {batch, legacy}
+        if data.get("label"):
+            allowed.add(staging_destination(self.app, data["label"], batch))
+        if destination not in allowed:
             raise ValueError("Unexpected batch destination")
         folder = self.downloads.joinpath(*destination.split("/"))
         current = folder
@@ -1029,7 +1041,7 @@ class Worker:
                         with self.db:
                             self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
                         continue
-                    data = {"search": str(uuid.uuid4())}
+                    data = {"search": str(uuid.uuid4()), "label": target["query"]}
                     if self.audio_policy is not None:
                         data["audioPolicy"] = self.audio_policy.config
                     self.save(ident, "searching", data, 30)

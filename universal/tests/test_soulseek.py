@@ -449,7 +449,8 @@ class WorkerTests(unittest.TestCase):
         ident = self.reach_batch()
         self.slsk.batches[ident]["transfers"][0]["state"] = "Completed, Succeeded"
         self.tick()
-        folder = self.root/ident
+        data = json.loads(self.row()["data"])
+        folder = self.worker.batch_folder(data)
         folder.mkdir(parents=True)
         file = folder/"Movie.2020.1080p.mkv"
         file.write_bytes(b"test")
@@ -464,7 +465,7 @@ class WorkerTests(unittest.TestCase):
         self.arr.movies[0]["movieFile"] = {"path": str(library)}
         # The library must be outside the completed-download root.
         self.worker.downloads = self.root/"downloads"
-        new_folder = self.worker.downloads/ident
+        new_folder = self.worker.batch_folder(data)
         new_folder.parent.mkdir(parents=True)
         folder.rename(new_folder)
         self.tick()
@@ -603,11 +604,11 @@ class WorkerTests(unittest.TestCase):
     def reviewed_batch(self):
         batch = self.reach_batch()
         self.slsk.batches[batch]["transfers"][0]["state"] = "Completed, Succeeded"
-        folder = self.root/batch
+        data = json.loads(self.row()["data"])
+        folder = self.worker.batch_folder(data)
         folder.mkdir(parents=True)
         source = folder/"Movie.2020.1080p.mkv"
         source.write_bytes(b"test")
-        data = json.loads(self.row()["data"])
         data["reason"] = "import rejected or identity mismatch"
         self.worker.save(1, "review", data)
         return folder,source,data
@@ -669,9 +670,15 @@ class WorkerTests(unittest.TestCase):
     def test_new_batch_destination_is_directly_under_configured_root(self):
         batch = self.reach_batch()
         post = next(data for path,data in self.slsk.posts if path.endswith("batches"))
-        self.assertEqual(post["options"]["destination"],batch)
+        destination = f"radarr/Movie 2020 - {batch[:8]}"
+        self.assertEqual(post["options"]["destination"],destination)
         data = json.loads(self.row()["data"])
-        self.assertEqual(self.worker.batch_folder(data),self.root/batch)
+        self.assertEqual(self.worker.batch_folder(data),self.root.joinpath(*destination.split("/")))
+
+    def test_readable_destination_sanitizes_unicode_and_path_characters(self):
+        batch = "a726e4ad-dba0-45f3-9494-86a79c74ae14"
+        self.assertEqual(soulseek.staging_destination("lidarr", "Måneskin: Rush / Deluxe?", batch),
+                         "lidarr/Maneskin Rush Deluxe - a726e4ad")
 
     def test_old_transfer_intent_keeps_its_existing_destination(self):
         import uuid
