@@ -140,7 +140,7 @@ chmod 2775 /config/extended/lyrics
 
 
 if [ ! -f /config/extended/beets-config.yaml ]; then
-	echo "Download Beets lidarr config..."
+	echo "Download Beets config..."
 	curl -sfL "${arrScriptsRawBase%/}/lidarr/beets-config.yaml" -o /config/extended/beets-config.yaml
 	echo "Done"
 fi

@@ -55,8 +55,8 @@ ProcessWithBeets () {
 		rm /config/extended/library-lidarr.blb
 		sleep 0.5
 	fi
-	if [ -f /config/extended/extended/beets-lidarr.log ]; then 
-		rm /config/extended/extended/beets-lidarr.log
+	if [ -f /config/extended/beets-lidarr.log ]; then
+		rm /config/extended/beets-lidarr.log
 		sleep 0.5
 	fi
 

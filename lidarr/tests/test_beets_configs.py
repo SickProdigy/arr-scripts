@@ -30,6 +30,7 @@ class BeetsConfigurationTests(unittest.TestCase):
         self.assertNotIn("ProcessWithBeets", audio)
         self.assertNotIn("beet -P lyrics", audio)
         self.assertIn("-c /config/extended/beets-config.yaml", tagger)
+        self.assertNotIn("/config/extended/extended/", tagger)
         self.assertIn("/lidarr/beets-config.yaml", setup)
 
         for source in (audio, tagger, setup):
