@@ -103,6 +103,7 @@ class Api:
                     candidate = None
                 safe_details = {
                     "Transfer belongs to another download",
+                    "Owned transfer metadata changed",
                     "Invalid owned incomplete path",
                     "Incomplete file changed or shared",
                     "Batch still has active or queued transfers",
@@ -404,10 +405,11 @@ class Worker:
             self.save(ident, "waiting", {}, self.failure_search_seconds if data.get("attempted") else self.notfound_seconds)
 
     def batch_room(self, ident):
-        foreground = self.db.execute("SELECT count(*) FROM jobs WHERE id!=? AND state IN ('searching','enqueueing','downloading','downloaded','publishing','handoff','importing','failure_cleanup')",(ident,)).fetchone()[0]
+        foreground = self.db.execute("SELECT count(*) FROM jobs WHERE id!=? AND state IN ('searching','enqueueing','downloading','downloaded','publishing','handoff','importing','failure_cleanup','cleanup')",(ident,)).fetchone()[0]
         background = self.db.execute("SELECT count(*) FROM background_batches").fetchone()[0]
-        retained = sum(bool(json.loads(row[0]).get("batch")) for row in self.db.execute("SELECT data FROM jobs WHERE id!=? AND state IN ('cleanup','review')",(ident,)))
-        return foreground < self.max_foreground_batches and background+retained < self.max_batches
+        # Review jobs are intentionally terminal and no longer own a live
+        # transfer slot. Counting them here permanently starves new searches.
+        return foreground < self.max_foreground_batches and foreground+background < self.max_batches
 
     def cancel_client_batch(self,data):
         if getattr(self.slsk,"client","slskd") != "nicotine":
@@ -910,7 +912,7 @@ class Worker:
             match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+.]|$)", str(version))
             parts = tuple(map(int, match.groups())) if match else ()
         client = getattr(self.slsk, "client", "slskd")
-        minimum = (0, 1, 3) if client == "nicotine" else (0, 26, 0)
+        minimum = (0, 1, 4) if client == "nicotine" else (0, 26, 0)
         if not parts or parts < minimum:
             print(f"Soulseek: {client} API version is unsupported (minimum {'.'.join(map(str, minimum))})", flush=True)
             return

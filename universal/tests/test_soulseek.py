@@ -300,6 +300,15 @@ class WorkerTests(unittest.TestCase):
         self.worker.defer_cleanup(1, "failure_cleanup", data, soulseek.ApiError(409, "Nicotine API"))
         self.assertEqual(self.row()["state"], "review")
 
+    def test_review_does_not_consume_batch_slot_but_cleanup_does(self):
+        self.worker.max_batches = 1
+        self.tick()
+        data = {"batch": str(soulseek.uuid.uuid4())}
+        self.worker.save(1, "review", data)
+        self.assertTrue(self.worker.batch_room(2))
+        self.worker.save(1, "cleanup", data)
+        self.assertFalse(self.worker.batch_room(2))
+
     def test_failed_cleanup_clears_client_before_file_removal(self):
         self.tick()
         batch = str(soulseek.uuid.uuid4())
@@ -373,7 +382,7 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(self.slsk.searches)
 
     def test_nicotine_uses_plugin_version_and_capabilities(self):
-        self.slsk.client, self.slsk.version = "nicotine", "0.1.3"
+        self.slsk.client, self.slsk.version = "nicotine", "0.1.4"
         self.tick()
         self.assertEqual(self.row()["state"], "searching")
 
@@ -885,7 +894,7 @@ class BackgroundTests(unittest.TestCase):
     row = WorkerTests.row
 
     def seed(self, alternatives=False):
-        self.slsk.client,self.slsk.version = "nicotine","0.1.3"
+        self.slsk.client,self.slsk.version = "nicotine","0.1.4"
         self.tick()
         self.tick()
         self.tick()

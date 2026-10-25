@@ -24,7 +24,7 @@ class CleanupRecoveryTests(unittest.TestCase):
         source.write_bytes(b"oversize")
         data = dict(batch=batch, destination=batch, username="peer",
                     files=[dict(filename="Movie.mkv", size=4)], candidates=[])
-        self.slsk.client, self.slsk.version = "nicotine", "0.1.3"
+        self.slsk.client, self.slsk.version = "nicotine", "0.1.4"
         self.slsk.batches[batch] = {"transfers": [{**data["files"][0], "state": "Completed, Errored"}]}
         self.worker.fail_candidate(1, data, "failed transfer")
         return source, data
@@ -68,7 +68,7 @@ class HandoffRecoveryTests(unittest.TestCase):
         for path in published.iterdir():
             path.unlink()
         published.rmdir()
-        self.worker.slsk.client, self.worker.slsk.version = "nicotine", "0.1.3"
+        self.worker.slsk.client, self.worker.slsk.version = "nicotine", "0.1.4"
         original = self.slsk.call
         def call(path, data=None, **query):
             if path.endswith(("/cancel", "/clear")):
