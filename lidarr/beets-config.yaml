@@ -1,5 +1,8 @@
-# Full enrichment for new downloads before Lidarr import.
-plugins: musicbrainz chroma embedart lastgenre deezer mbsync
+# Lightweight pre-import identification for arr-scripts downloads.
+# MusicBrainz matching and AcoustID fingerprints help verify/tag the release so
+# Lidarr can identify it. Full genres, artwork, external IDs, lyrics, ReplayGain,
+# ratings, and contribution work run only after Lidarr imports the final files.
+plugins: musicbrainz chroma
 art_filename: cover
 threaded: yes
 per_disc_numbering: yes
@@ -71,31 +74,6 @@ import:
 chroma:
     auto: yes
 
-embedart:
-    auto: yes
-    
-lastgenre:
-    auto: yes
-    canonical: yes
-    count: 7
-    fallback: null
-    force: yes
-    keep_existing: yes
-    min_weight: 10
-    prefer_specific: no
-    source: track
-    whitelist: /config/extended/beets-genre-whitelist.txt
-    title_case: yes
-
 musicbrainz:
     data_source_mismatch_penalty: 0.0
-    # Seed genres from MusicBrainz; lastgenre preserves these and adds Last.fm genres.
-    genres: yes
-    external_ids:
-        spotify: yes
-        bandcamp: yes
-        deezer: yes
-        tidal: yes
-
-deezer:
-    data_source_mismatch_penalty: 0.5
+    genres: no

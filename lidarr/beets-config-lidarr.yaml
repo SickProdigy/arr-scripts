@@ -1,4 +1,7 @@
-# Match download enrichment after any Lidarr import; importadded preserves library mtimes.
+# Full post-import enrichment at Lidarr's final library path.
+# Every imported source receives MusicBrainz/Last.fm genres, artwork, fingerprints,
+# and external IDs here. Lyrics, ReplayGain, ratings, and contributions remain
+# separate workflows. importadded preserves mtimes while Beets writes metadata.
 plugins: musicbrainz chroma embedart lastgenre deezer mbsync importadded
 art_filename: cover
 threaded: yes
