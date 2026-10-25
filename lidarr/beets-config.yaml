@@ -1,3 +1,4 @@
+# Full enrichment for new downloads before Lidarr import.
 plugins: musicbrainz chroma embedart lastgenre deezer mbsync
 art_filename: cover
 threaded: yes
