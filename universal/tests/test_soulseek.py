@@ -680,6 +680,21 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(soulseek.staging_destination("lidarr", "Måneskin: Rush / Deluxe?", batch),
                          "lidarr/Maneskin Rush Deluxe - a726e4ad")
 
+    def test_candidate_without_search_label_persists_its_fallback_label(self):
+        candidate = {"username": "peer", "files": [{"filename": "Movie.mkv", "size": 4}]}
+        self.tick()
+        self.worker.next_candidate(1, {"search": "search-id", "candidates": [candidate]})
+        data = json.loads(self.row()["data"])
+        self.assertEqual(data["label"], "Item 1")
+        self.assertRegex(data["destination"], r"^radarr/Item 1 - [0-9a-f]{8}$")
+        self.assertEqual(self.worker.batch_folder(data), self.root.joinpath(*data["destination"].split("/")))
+
+    def test_first_readable_folder_fallback_can_finish_without_saved_label(self):
+        batch = "a726e4ad-dba0-45f3-9494-86a79c74ae14"
+        destination = "radarr/Item 65 - a726e4ad"
+        data = {"batch": batch, "destination": destination}
+        self.assertEqual(self.worker.batch_folder(data), self.root.joinpath(*destination.split("/")))
+
     def test_old_transfer_intent_keeps_its_existing_destination(self):
         import uuid
         batch = str(uuid.uuid4())

@@ -411,8 +411,8 @@ class Worker:
                 continue
             next_data = {k:data[k] for k in ("search","label","audioPolicy","attempted") if k in data}
             next_data.update(candidate, candidates=candidates, batch=str(uuid.uuid4()))
-            next_data["destination"] = staging_destination(
-                self.app, next_data.get("label", f"Item {ident}"), next_data["batch"])
+            next_data["label"] = next_data.get("label") or f"Item {ident}"
+            next_data["destination"] = staging_destination(self.app, next_data["label"], next_data["batch"])
             debug(f"Soulseek {self.app}: item {ident}: selected candidate with {len(candidate['files'])} files; {len(candidates)} alternates remain")
             self.save(ident, "enqueueing", next_data)
             return
@@ -673,6 +673,12 @@ class Worker:
         allowed = {batch, legacy}
         if data.get("label"):
             allowed.add(staging_destination(self.app, data["label"], batch))
+        # The first readable-folder release could create this exact fallback
+        # destination without persisting its label. Accept only that narrowly
+        # generated form so an in-progress transfer can finish safely.
+        fallback = rf"{re.escape(self.app)}/Item [0-9]+ - {re.escape(batch[:8])}"
+        if re.fullmatch(fallback, destination):
+            allowed.add(destination)
         if destination not in allowed:
             raise ValueError("Unexpected batch destination")
         folder = self.downloads.joinpath(*destination.split("/"))
@@ -1144,7 +1150,10 @@ class Worker:
                     self.save(ident, "review", {**data, "reason": str(error)})
                     continue
                 # Never log API response bodies, credentials or peer-supplied URLs.
-                print(f"Soulseek {self.app}: item {ident}: {type(error).__name__}; deferred", flush=True)
+                detail = type(error).__name__
+                if isinstance(error, ValueError) and str(error):
+                    detail += ": " + " ".join(str(error).split())[:240]
+                print(f"Soulseek {self.app}: item {ident}: {detail}; deferred", flush=True)
                 # Reconcile persisted intent on next run, including uncertain POSTs.
                 with self.db:
                     self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (now+300, ident))
