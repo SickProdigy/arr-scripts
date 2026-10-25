@@ -972,7 +972,10 @@ DownloadProcess () {
 	if [ -d "$importPath/$downloadedAlbumFolder" ]; then
 		NotifyLidarrForImport "$importPath/$downloadedAlbumFolder"
 		lidarrDownloadImportNotfication="true"
-		LidarrTaskStatusCheck
+		if ! LidarrTaskStatusCheck; then
+			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: STATUS :: Lidarr remained busy; deferring post-import work"
+			return 1
+		fi
 		if [ -f /config/extended/python/ReleaseGroups.py ]; then
 			python3 /config/extended/python/ReleaseGroups.py --apply --album-id "$wantedAlbumId" --set-group "$releaseGroup" \
 				|| log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: WARNING :: Unable to persist $releaseGroup release group"
@@ -1461,7 +1464,10 @@ SearchProcess () {
 		lidarrAlbumTitle=$(echo "$lidarrAlbumData" | jq -r ".title")
 		lidarrAlbumForeignAlbumId=$(echo "$lidarrAlbumData" | jq -r ".foreignAlbumId")
 		
-		LidarrTaskStatusCheck
+		if ! LidarrTaskStatusCheck; then
+			log "STATUS :: LIDARR BUSY :: Deferring the remaining audio work until the next cycle..."
+			return 1
+		fi
 				
 		if [ -f "/config/extended/logs/notfound/$wantedAlbumId--$lidarrArtistForeignArtistId--$lidarrAlbumForeignAlbumId" ]; then
 			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $wantedAlbumListSource :: $lidarrAlbumType :: $wantedAlbumListSource :: $lidarrArtistName :: $lidarrAlbumTitle :: Previously Not Found, skipping..."
@@ -2300,7 +2306,7 @@ LidarrTaskStatusCheck () {
 		fi
 	done
 
-	log "STATUS :: LIDARR :: ERROR :: Timed out after ${lidarrTaskWaitTimeout}s waiting for active tasks; continuing..."
+	log "STATUS :: LIDARR BUSY :: Timed out after ${lidarrTaskWaitTimeout}s; deferring audio work until the next cycle..."
 	return 1
 }
 
@@ -2370,7 +2376,9 @@ AudioProcess () {
   	TidalClientSetup
   fi
   
-  LidarrTaskStatusCheck
+  if ! LidarrTaskStatusCheck; then
+    return 1
+  fi
   
   # Get artist list for LidarrMissingAlbumSearch process, to prevent searching for artists that will not be processed by the script
   lidarrMissingAlbumArtistsData=$(CurlRequest "$arrUrl/api/v1/artist?apikey=$arrApiKey" | jq -r .[])
@@ -2382,7 +2390,9 @@ AudioProcess () {
   fi
   
   if [ "$addDeezerTopArtists" == "true" ] || [ "$addDeezerTopAlbumArtists" == "true" ] || [ "$addDeezerTopTrackArtists" == "true" ] || [ "$addRelatedArtists" == "true" ]; then
-  	LidarrTaskStatusCheck
+	if ! LidarrTaskStatusCheck; then
+		return 1
+	fi
   	LidarrMissingAlbumSearch
   fi
   

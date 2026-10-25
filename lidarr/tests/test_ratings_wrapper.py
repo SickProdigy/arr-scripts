@@ -84,6 +84,12 @@ class RatingsWrapperTests(unittest.TestCase):
         self.assertIn("discogs", trace)
         self.assertIn("--discogs-inherit-album-rating", trace)
 
+    def test_ordered_provider_fallback_is_forwarded(self):
+        code, trace = self.run_wrapper(arguments=("--work",),
+            additional_config='ratingsProvider="musicbrainz,lastfm"\n')
+        self.assertEqual(code, 0)
+        self.assertIn("musicbrainz,lastfm", trace)
+
     def test_preview_keeps_both_packages_in_preview_mode(self):
         code, trace = self.run_wrapper(arguments=("--library", "--preview"))
         self.assertEqual(code, 0)
