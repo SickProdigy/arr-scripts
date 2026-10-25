@@ -51,10 +51,7 @@ ProcessWithBeets () {
 
 	# Input
 	# $1 Download Folder to process
-	if [ -f /config/extended/library-lidarr.blb ]; then
-		rm /config/extended/library-lidarr.blb
-		sleep 0.5
-	fi
+	rm -f /config/extended/library-lidarr.blb /config/extended/library-lidarr.blb-before-*.bak
 	if [ -f /config/extended/beets-lidarr.log ]; then
 		rm /config/extended/beets-lidarr.log
 		sleep 0.5
@@ -108,10 +105,7 @@ ProcessWithBeets () {
 		sleep 0.5
 	fi
 
-	if [ -f /config/extended/library-lidarr.blb ]; then
-		rm /config/extended/library-lidarr.blb
-		sleep 0.5
-	fi
+	rm -f /config/extended/library-lidarr.blb /config/extended/library-lidarr.blb-before-*.bak
 	if [ -f /config/extended/logs/beets.log ]; then 
 		rm /config/extended/logs/beets.log
 		sleep 0.5

@@ -31,6 +31,7 @@ class BeetsConfigurationTests(unittest.TestCase):
         self.assertNotIn("beet -P lyrics", audio)
         self.assertIn("-c /config/extended/beets-config.yaml", tagger)
         self.assertNotIn("/config/extended/extended/", tagger)
+        self.assertGreaterEqual(tagger.count("library-lidarr.blb-before-*.bak"), 2)
         self.assertIn("/lidarr/beets-config.yaml", setup)
 
         for source in (audio, tagger, setup):
