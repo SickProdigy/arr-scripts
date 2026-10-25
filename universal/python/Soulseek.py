@@ -332,7 +332,15 @@ class Worker:
         # bounded recovery cycle after upgrade without weakening file checks.
         for row in self.db.execute("SELECT id,data FROM jobs WHERE state='review'").fetchall():
             data = json.loads(row["data"])
-            if (data.get("cleanupError") == "Nicotine API HTTP 409"
+            if (data.get("cleanupError") == "Nicotine API HTTP 409: Transfer belongs to another download"
+                    and data.get("reason", "").startswith("cleanup failed")
+                    and data.get("cleanupRecoveryVersion", 0) < 2):
+                # API 0.1.4 can safely detach a stale batch after Nicotine has
+                # reused its peer/filename row for a different destination.
+                data.update(cleanupAttempts=0, cleanupRecoveryVersion=2)
+                self.db.execute("UPDATE jobs SET state='failure_cleanup',next_run=0,data=? WHERE id=?",
+                                (json.dumps(data), row["id"]))
+            elif (data.get("cleanupError") == "Nicotine API HTTP 409"
                     and data.get("reason", "").startswith("cleanup failed three times")
                     and not data.get("cleanupRecoveryVersion")):
                 data.update(cleanupAttempts=0, cleanupRecoveryVersion=1)

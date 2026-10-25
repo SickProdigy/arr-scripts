@@ -309,6 +309,20 @@ class WorkerTests(unittest.TestCase):
         self.worker.save(1, "cleanup", data)
         self.assertFalse(self.worker.batch_room(2))
 
+    def test_foreign_transfer_review_gets_one_upgrade_recovery(self):
+        self.tick()
+        data = {"batch": str(soulseek.uuid.uuid4()), "cleanupAttempts": 12,
+                "cleanupError": "Nicotine API HTTP 409: Transfer belongs to another download",
+                "reason": "cleanup failed 12 times; inspect retained files"}
+        self.worker.save(1, "review", data)
+        self.worker.db.close()
+        self.worker = soulseek.Worker("radarr", self.arr, self.slsk, self.root, self.root,
+                                     delay=0, clock=lambda: self.now)
+        self.assertEqual(self.row()["state"], "failure_cleanup")
+        recovered = json.loads(self.row()["data"])
+        self.assertEqual(recovered["cleanupAttempts"], 0)
+        self.assertEqual(recovered["cleanupRecoveryVersion"], 2)
+
     def test_failed_cleanup_clears_client_before_file_removal(self):
         self.tick()
         batch = str(soulseek.uuid.uuid4())
