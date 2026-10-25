@@ -26,6 +26,25 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(tasks["ratings-backfill"]["preview"], "ratings-preview")
         self.assertEqual(tasks["release-groups-apply"]["preview"], "release-groups-preview")
         self.assertEqual(tasks["musicbrainz-genres-submit"]["preview"], "musicbrainz-genres-preview")
+        self.assertEqual(tasks["ratings-backfill"]["section"], "ratings")
+
+    def test_ratings_status_reports_provider_order_and_pending_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = DASHBOARD.SONICRATINGS_STATE_DIR
+            DASHBOARD.SONICRATINGS_STATE_DIR = Path(directory)
+            job_dir = Path(directory) / "server" / "jobs"
+            job_dir.mkdir(parents=True)
+            (job_dir / "one.json").write_text("{}", encoding="utf-8")
+            try:
+                status = DASHBOARD.ratings_status({
+                    "enableRatings": "true", "ratingsProvider": "musicbrainz,lastfm",
+                    "subsonicUrl": "https://music.example", "subsonicUsername": "user",
+                    "subsonicPassword": "secret"})
+                self.assertEqual(status["providers"], ["musicbrainz", "lastfm"])
+                self.assertEqual(status["pending_jobs"], 1)
+                self.assertTrue(status["server_configured"])
+            finally:
+                DASHBOARD.SONICRATINGS_STATE_DIR = old
 
     def test_configuration_masks_secrets_and_preserves_layout_on_save(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -39,6 +58,28 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(backup.is_file())
             self.assertEqual(DASHBOARD.read_config(config)["dashboardPassword"], "new'password")
             self.assertIn("# enabled", config.read_text())
+
+    def test_auxiliary_configuration_is_allowlisted_and_backed_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "beets.yaml"
+            path.write_text("plugins: musicbrainz\n", encoding="utf-8")
+            old = DASHBOARD.CONFIG_FILES
+            DASHBOARD.CONFIG_FILES = {"beets-download": (path, "Beets - download processing")}
+            try:
+                self.assertEqual(DASHBOARD.auxiliary_configuration("beets-download")["content"], "plugins: musicbrainz\n")
+                backup = DASHBOARD.update_auxiliary_configuration("beets-download", "plugins: musicbrainz chroma\n")
+                self.assertTrue(backup.is_file())
+                self.assertEqual(path.read_text(encoding="utf-8"), "plugins: musicbrainz chroma\n")
+                with self.assertRaises(ValueError):
+                    DASHBOARD.auxiliary_configuration("../../secret")
+            finally:
+                DASHBOARD.CONFIG_FILES = old
+
+    def test_interface_includes_overview_ratings_and_beets_editors(self):
+        self.assertIn('data-page="overview"', DASHBOARD.HTML)
+        self.assertIn('data-page="ratings"', DASHBOARD.HTML)
+        self.assertIn('value="beets-download"', DASHBOARD.HTML)
+        self.assertIn('value="beets-lidarr"', DASHBOARD.HTML)
 
     def test_replaygain_schedule_uses_success_interval_or_hourly_retry(self):
         with tempfile.TemporaryDirectory() as directory:
