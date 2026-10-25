@@ -37,10 +37,46 @@ export SOULSEEK_RELEASE_GROUP_MODE="${soulseekReleaseGroupMode:-extend}"
 export SOULSEEK_AUDIO_ENABLED="${enableAudio:-false}"
 export SOULSEEK_ARR_URL="${arrUrl:-}"
 export SOULSEEK_ARR_API_KEY="${arrApiKey:-}"
+
+wait_for_arr_ready() {
+    local api_key="$SOULSEEK_ARR_API_KEY"
+    local api_url="$SOULSEEK_ARR_URL"
+    local api_version="v3"
+    local config_file="${SOULSEEK_CONFIG_DIR}/config.xml"
+    local values=()
+
+    if [[ -z "$api_url" && -f "$config_file" ]]; then
+        mapfile -t values < <(python3 - "$config_file" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+base = root.findtext("UrlBase", default="").strip("/")
+port = root.findtext("Port", default="")
+print(f"http://127.0.0.1:{port}" + (f"/{base}" if base else ""))
+print(root.findtext("ApiKey", default=""))
+PY
+)
+        api_url="${values[0]:-}"
+        api_key="${values[1]:-}"
+    fi
+    [[ -n "$api_url" && -n "$api_key" ]] || return 0
+    [[ "$app" == "lidarr" ]] && api_version="v1"
+
+    until curl -fsS --connect-timeout 2 --max-time 4 \
+        -H "X-Api-Key: $api_key" "${api_url%/}/api/$api_version/system/status" >/dev/null 2>&1; do
+        sleep 2
+    done
+    # The status endpoint begins responding just before the Arr background
+    # task manager finishes starting. Avoid racing configuration and imports.
+    sleep "${ARR_STARTUP_GRACE_SECONDS:-3}"
+}
+
 worker="${ARR_SOULSEEK_WORKER:-/config/extended/python/Soulseek.py}"
 if [[ " ${*:-} " == *" --diagnose "* ]]; then
     exec python3 "$worker" "$@"
 fi
+wait_for_arr_ready
 logDir="${SOULSEEK_CONFIG_DIR}/logs"
 mkdir -p "$logDir"
 logFile="$logDir/Soulseek.log"

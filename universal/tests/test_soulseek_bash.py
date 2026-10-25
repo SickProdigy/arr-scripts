@@ -50,6 +50,19 @@ class WrapperTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "7")
 
+    def test_soulseek_waits_for_arr_before_starting_worker(self):
+        source = (ROOT/"universal/Soulseek.bash").read_text(encoding="utf-8")
+        self.assertIn("wait_for_arr_ready()", source)
+        self.assertLess(source.index("wait_for_arr_ready\n"), source.index('python3 "$worker" "$@" 2>&1'))
+
+    def test_autoconfig_allows_lidarr_task_manager_to_finish_starting(self):
+        source = (ROOT/"lidarr/AutoConfig.service.bash").read_text(encoding="utf-8")
+        ready = source.index("verifyApiAccess")
+        grace = source.index('sleep "${arrStartupGraceSeconds:-3}"')
+        write = source.index('if [ "$configureMediaManagement"')
+        self.assertLess(ready, grace)
+        self.assertLess(grace, write)
+
     def test_every_installer_downloads_worker_and_correct_service(self):
         for app in ("lidarr", "sonarr", "radarr"):
             source = (ROOT/app/"setup.bash").read_text(encoding="utf-8")

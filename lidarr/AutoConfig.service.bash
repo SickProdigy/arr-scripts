@@ -18,6 +18,9 @@ fi
 
 getArrAppInfo
 verifyApiAccess
+# Lidarr's status endpoint responds shortly before its background task manager
+# is ready. Avoid firing ConfigSavedEvent during that startup window.
+sleep "${arrStartupGraceSeconds:-3}"
 
 if [ "$configureMediaManagement" == "true" ] || [ -z "$configureMediaManagement" ]; then
   log "Configuring Lidarr Media Management Settings"
