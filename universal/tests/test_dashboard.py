@@ -1,5 +1,6 @@
 import importlib.util
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,40 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(tasks["lyrics-backfill"]["preview"], "lyrics-preview")
         self.assertEqual(tasks["ratings-backfill"]["preview"], "ratings-preview")
         self.assertEqual(tasks["release-groups-apply"]["preview"], "release-groups-preview")
+        self.assertEqual(tasks["musicbrainz-genres-submit"]["preview"], "musicbrainz-genres-preview")
+
+    def test_configuration_masks_secrets_and_preserves_layout_on_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "extended.conf"
+            config.write_text('enableDashboard="true" # enabled\ndashboardPassword=\'old$secret\' # hidden\n', encoding="utf-8")
+            groups = DASHBOARD.configuration_fields(config)
+            fields = {field["name"]: field for group in groups for field in group["fields"]}
+            self.assertEqual(fields["dashboardPassword"]["value"], "")
+            self.assertTrue(fields["dashboardPassword"]["configured"])
+            backup = DASHBOARD.update_configuration({"enableDashboard": "false", "dashboardPassword": "new'password"}, config)
+            self.assertTrue(backup.is_file())
+            self.assertEqual(DASHBOARD.read_config(config)["dashboardPassword"], "new'password")
+            self.assertIn("# enabled", config.read_text())
+
+    def test_replaygain_schedule_uses_success_interval_or_hourly_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_state, old_dashboard, old_logs = DASHBOARD.REPLAYGAIN_STATE_DIR, DASHBOARD.STATE_DIR, DASHBOARD.LOG_DIR
+            DASHBOARD.REPLAYGAIN_STATE_DIR = Path(directory) / "replaygain"
+            DASHBOARD.STATE_DIR = Path(directory) / "dashboard"
+            DASHBOARD.LOG_DIR = Path(directory) / "logs"
+            DASHBOARD.REPLAYGAIN_STATE_DIR.mkdir()
+            now = int(time.time())
+            (DASHBOARD.REPLAYGAIN_STATE_DIR / "maintenance.last-attempt").write_text(str(now - 60))
+            (DASHBOARD.REPLAYGAIN_STATE_DIR / "maintenance.last-success").write_text(str(now - 60))
+            try:
+                store = DASHBOARD.JobStore("lidarr", {"enableReplaygainTags": "true", "enableReplaygainMaintenance": "true", "replaygainMaintenanceDays": "7"})
+                task = next(item for item in store.public_tasks() if item["id"] == "replaygain-maintenance")
+                self.assertAlmostEqual(task["next_execution"], now - 60 + 7 * 86400, delta=1)
+                (DASHBOARD.REPLAYGAIN_STATE_DIR / "maintenance.last-attempt").write_text(str(now))
+                task = next(item for item in store.public_tasks() if item["id"] == "replaygain-maintenance")
+                self.assertAlmostEqual(task["next_execution"], now + 3600, delta=1)
+            finally:
+                DASHBOARD.REPLAYGAIN_STATE_DIR, DASHBOARD.STATE_DIR, DASHBOARD.LOG_DIR = old_state, old_dashboard, old_logs
 
     def test_other_apps_start_without_unsafe_commands(self):
         self.assertEqual(DASHBOARD.task_catalog("sonarr", {}), {})

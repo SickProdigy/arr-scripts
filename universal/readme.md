@@ -37,11 +37,19 @@ dashboardPassword="your_password"
 ```
 
 Restart twice after first installing the dashboard service. Open the mapped port
-in a browser. Lidarr currently provides task controls for ReplayGain, lyrics,
-ratings, release-group repair, and library audits. Sonarr, Radarr, and Readarr
-initially provide the shared log viewer while their task adapters are added.
-Long jobs continue when the browser closes. Write tasks that can affect a broad
-part of the library require a recent successful preview.
+in a browser. The Arr-style sidebar separates Tasks, MusicBrainz, Configuration,
+and Logs. Lidarr shows scheduled ReplayGain maintenance plus paired preview/run
+workflows for ReplayGain, lyrics, ratings, release-group repair, and library
+audits. Long jobs continue when the browser closes. Write tasks that can affect
+a broad part of the library require a recent successful preview.
+
+Configuration changes preserve the existing file layout and comments and create
+a timestamped backup before replacement. Existing secret values are never sent
+to the browser; enter a new value only when replacing one. The MusicBrainz page
+exposes exact-MBID genre contribution previews and submissions. The monitored
+missing-catalog review and seeded-editor workflow remains under development.
+Sonarr, Radarr, and Readarr initially provide the shared configuration and log
+views while their task adapters are added.
 
 ## QueueCleaner
 

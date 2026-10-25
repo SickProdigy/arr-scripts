@@ -53,7 +53,7 @@ usage () {
 Usage:
   ReplayGainTagger.bash
   ReplayGainTagger.bash --path /music/Artist/Album
-  ReplayGainTagger.bash --maintenance
+  ReplayGainTagger.bash --maintenance [--force]
   ReplayGainTagger.bash --audit [--path /music]
   ReplayGainTagger.bash --backfill [--dry-run] [--path /music]
   ReplayGainTagger.bash --repair-audit /config/logs/replaygain-audit.log [--dry-run] [--force] [--path /music]
@@ -645,7 +645,7 @@ maintenance () {
     mkdir -p "$replaygainStateDir" || return 1
     command -v flock >/dev/null 2>&1 || { log "ERROR :: flock is required for maintenance"; return 2; }
     exec 9>"$replaygainStateDir/maintenance.lock"
-    flock -n 9 || return 0
+    flock -n 9 || { log "ReplayGain maintenance is already running; skipped"; return 0; }
     now=$(date +%s)
     if [ -f "$replaygainStateDir/maintenance.last-attempt" ]; then
         read -r last < "$replaygainStateDir/maintenance.last-attempt"
@@ -659,7 +659,9 @@ maintenance () {
     if [ "$lastSuccess" -gt 0 ] && [ "$lastSuccess" -ge "$last" ]; then
         waitSeconds=$((interval * 86400))
     fi
-    [ "$((now - last))" -ge "$waitSeconds" ] || return 0
+    if [ "$forceScan" != "true" ]; then
+        [ "$((now - last))" -ge "$waitSeconds" ] || return 0
+    fi
     # Interrupted/failed attempts retry after an hour; only success earns the
     # configured weekly interval. The lock prevents concurrent full audits.
     printf '%s\n' "$now" > "$replaygainStateDir/maintenance.last-attempt"
