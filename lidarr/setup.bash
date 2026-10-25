@@ -139,12 +139,6 @@ chown "${PUID:-1000}:${PGID:-1000}" /config/extended/lyrics
 chmod 2775 /config/extended/lyrics
 
 
-if [ ! -f /config/extended/beets-config.yaml ]; then
-	echo "Download Beets config..."
-	curl -sfL "${arrScriptsRawBase%/}/lidarr/beets-config.yaml" -o /config/extended/beets-config.yaml
-	echo "Done"
-fi
-
 if [ ! -f /config/extended/beets-config-lidarr.yaml ]; then
 	echo "Download Beets lidarr config..."
 	curl -sfL "${arrScriptsRawBase%/}/lidarr/beets-config-lidarr.yaml" -o /config/extended/beets-config-lidarr.yaml

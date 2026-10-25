@@ -300,11 +300,13 @@ class HookTests(unittest.TestCase):
         for name in ('Lyrics.bash', 'Lyrics.service.bash', 'python/Lyrics.py', 'BeetsLyrics.bash'):
             self.assertIn('/lidarr/'+name, source)
         self.assertIn('chmod 2775 /config/extended/lyrics', source)
-        for name in ('Audio.service.bash', 'BeetsTagger.bash'):
-            hook = (ROOT/name).read_text()
-            self.assertIn('beet -P lyrics', hook)
-            self.assertIn('bash /config/extended/Lyrics.bash', hook)
-            self.assertNotIn('bash /config/extended/BeetsLyrics.bash', hook)
+        hook = (ROOT/'BeetsTagger.bash').read_text()
+        self.assertIn('beet -P lyrics', hook)
+        self.assertIn('bash /config/extended/Lyrics.bash', hook)
+        self.assertNotIn('bash /config/extended/BeetsLyrics.bash', hook)
+        audio = (ROOT/'Audio.service.bash').read_text()
+        self.assertNotIn('beet -P lyrics', audio)
+        self.assertNotIn('bash /config/extended/Lyrics.bash', audio)
 
     def test_metadata_failure_skips_enqueue_and_enqueue_failure_does_not_stop_import(self):
         source = (ROOT/'BeetsTagger.bash').read_text()

@@ -70,11 +70,11 @@ class DashboardTests(unittest.TestCase):
             path = Path(directory) / "beets.yaml"
             path.write_text("plugins: musicbrainz\n", encoding="utf-8")
             old, old_state = DASHBOARD.CONFIG_FILES, DASHBOARD.STATE_DIR
-            DASHBOARD.CONFIG_FILES = {"beets-download": (path, "Beets - download processing")}
+            DASHBOARD.CONFIG_FILES = {"beets-lidarr": (path, "Beets - post-import enrichment")}
             DASHBOARD.STATE_DIR = Path(directory) / "dashboard"
             try:
-                self.assertEqual(DASHBOARD.auxiliary_configuration("beets-download")["content"], "plugins: musicbrainz\n")
-                backup = DASHBOARD.update_auxiliary_configuration("beets-download", "plugins: musicbrainz chroma\n")
+                self.assertEqual(DASHBOARD.auxiliary_configuration("beets-lidarr")["content"], "plugins: musicbrainz\n")
+                backup = DASHBOARD.update_auxiliary_configuration("beets-lidarr", "plugins: musicbrainz chroma\n")
                 self.assertTrue(backup.is_file())
                 self.assertEqual(path.read_text(encoding="utf-8"), "plugins: musicbrainz chroma\n")
                 with self.assertRaises(ValueError):
@@ -100,7 +100,7 @@ class DashboardTests(unittest.TestCase):
     def test_interface_includes_overview_ratings_and_beets_editors(self):
         self.assertIn('data-page="overview"', DASHBOARD.HTML)
         self.assertIn('data-page="ratings"', DASHBOARD.HTML)
-        self.assertIn('value="beets-download"', DASHBOARD.HTML)
+        self.assertNotIn('value="beets-download"', DASHBOARD.HTML)
         self.assertIn('value="beets-lidarr"', DASHBOARD.HTML)
 
     def test_replaygain_schedule_uses_success_interval_or_hourly_retry(self):

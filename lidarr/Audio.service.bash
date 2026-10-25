@@ -353,15 +353,13 @@ Configuration () {
 	log "Match Distance: $matchDistance"
 
 	if [ $enableBeetsTagging = true ]; then
-		log "Beets Tagging Enabled"
+		log "Beets post-import tagging enabled"
 		log "Beets Matching Threshold ${beetsMatchPercentage}%"
 		beetsMatchThreshold=$(awk "BEGIN { printf \"%.2f\", (100 - ${beetsMatchPercentage}) / 100 }")
 		log "Configuring Beets matching distance ${beetsMatchThreshold}"
-		for beetsConfig in /config/extended/beets-config.yaml /config/extended/beets-config-lidarr.yaml; do
-			if [ -f "$beetsConfig" ]; then
-				sed -Ei "s/^([[:space:]]*strong_rec_thresh:).*/\\1 ${beetsMatchThreshold}/" "$beetsConfig"
-			fi
-		done
+		if [ -f /config/extended/beets-config-lidarr.yaml ]; then
+			sed -Ei "s/^([[:space:]]*strong_rec_thresh:).*/\\1 ${beetsMatchThreshold}/" /config/extended/beets-config-lidarr.yaml
+		fi
 	else
 		log "Beets Tagging Disabled"
 	fi
@@ -866,25 +864,6 @@ DownloadProcess () {
 		rm -f "/config/extended/logs/downloaded/failed/tidal/$1"
 	fi
 
-	# Tag with beets
-	if [ "$enableBeetsTagging" == "true" ]; then
-		if [ -f /config/extended/beets-error ]; then
-			rm /config/extended/beets-error
-		fi
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Processing files with beets..."
-		ProcessWithBeets "$audioPath/incomplete"
-	fi
-
-	# Embed Lyrics into Flac files
-	find "$audioPath/incomplete" -type f -iname "*.flac" -print0 | while IFS= read -r -d '' file; do
-		lrcFile="${file%.*}.lrc"
-		if [ -s "$lrcFile" ] && ! metaflac --export-tags-to=- "$file" | grep -qiE '^(lyrics|syncedlyrics)=.+'; then
-			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Embedding lyrics (lrc) into $file"
-			metaflac --remove-tag=Lyrics "$file"
-			metaflac --set-tag-from-file="Lyrics=$lrcFile" "$file"
-		fi
-	done
-	
 	if [ "$audioFormat" != "native" ]; then
 		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Converting Flac Audio to  ${audioFormat^^} ($audioBitrateText)"
 		if [ "$audioFormat" == "opus" ]; then
@@ -1066,103 +1045,6 @@ for path in root.rglob("*"):
 if tagged_files == 0:
     raise RuntimeError("No supported audio files were tagged")
 PY
-}
-
-ProcessWithBeets () {
-	# Input
-	# $1 Download Folder to process
-	if [ -f /config/extended/beets-library.blb ]; then
-		rm /config/extended/beets-library.blb
-		sleep 0.5
-	fi
-	if [ -f /config/extended/beets.log ]; then 
-		rm /config/extended/beets.log
-		sleep 0.5
-	fi
-
-	if [ -f "/config/beets-match" ]; then 
-		rm "/config/beets-match"
-		sleep 0.5
-	fi
-	touch "/config/beets-match"
-	sleep 0.5
-
-	beet -P lyrics -c /config/extended/beets-config.yaml -l /config/extended/beets-library.blb -d "$1" import -qC "$1"
-	beetsImportStatus=$?
-	if [ $(find "$1" -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" -newer "/config/beets-match" | wc -l) -gt 0 ]; then
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: SUCCESS: Matched with beets!"
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: fixing track tags" 
-		find "$audioPath/incomplete" -type f -iname "*.flac" -print0 | while IFS= read -r -d '' file; do
-			getArtistCredit="$(ffprobe -loglevel 0 -print_format json -show_format -show_streams "$file" | jq -r ".format.tags.ARTIST_CREDIT" | sed "s/null//g" | sed "/^$/d")"
-			# album artist
-			metaflac --remove-tag=ALBUMARTIST "$file"
-			metaflac --remove-tag=ALBUMARTIST_CREDIT "$file"
-			metaflac --remove-tag=ALBUM_ARTIST "$file"
-			metaflac --remove-tag="ALBUM ARTIST" "$file"
-			# artist
-			metaflac --remove-tag=ARTIST "$file"
-			metaflac --remove-tag=ARTIST_CREDIT "$file"
-			if [ ! -z "$getArtistCredit" ]; then
-        		metaflac --set-tag=ARTIST="$getArtistCredit" "$file"
-			else
-				metaflac --set-tag=ARTIST="$lidarrArtistName" "$file"
-			fi
-			# sorts
-			metaflac --remove-tag=ARTISTSORT "$file"
-			metaflac --remove-tag=COMPOSERSORT "$file"
-			metaflac --remove-tag=ALBUMARTISTSORT "$file"
-			# lidarr
-			metaflac --set-tag=ALBUMARTIST="$lidarrArtistName" "$file"
-			# mbrainz
-			metaflac --remove-tag=MUSICBRAINZ_ARTISTID "$file"
-			metaflac --remove-tag=MUSICBRAINZ_ALBUMARTISTID "$file"
-			metaflac --set-tag=MUSICBRAINZ_ARTISTID="$lidarrArtistForeignArtistId" "$file"
-			metaflac --set-tag=MUSICBRAINZ_ALBUMARTISTID="$lidarrArtistForeignArtistId" "$file"
-			log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: FIXED : $file"
-		done
-	else
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: ERROR :: Unable to match using beets to a musicbrainz release..."
-		return
-	fi	
-
-	if [ "${beetsImportStatus:-1}" = "0" ]; then
-		bash /config/extended/Lyrics.bash "$1" "${wantedAlbumId:-}" 2>&1 | tee -a "/config/logs/$logFileName"
-	fi
-
-	if [ -f "/config/beets-match" ]; then 
-		rm "/config/beets-match"
-		sleep 0.1
-	fi
-
-	# Get file metadata
-	GetFile=$(find "$audioPath/incomplete" -type f -regex ".*/.*\.\(flac\|opus\|m4a\|mp3\)" | head -n1)
-	extension="${GetFile##*.}"
-	if [ "$extension" == "opus" ]; then
-		matchedTags=$(ffprobe -hide_banner -loglevel fatal -show_error -show_format -show_streams -show_programs -show_chapters -show_private_data -print_format json "$GetFile" | jq -r ".streams[].tags")
-	else
-		matchedTags=$(ffprobe -hide_banner -loglevel fatal -show_error -show_format -show_streams -show_programs -show_chapters -show_private_data -print_format json "$GetFile" | jq -r ".format.tags")
-	fi
-
-	# Get Musicbrainz Release Group ID and Album Artist ID from tagged file
-	if [ "$extension" == "flac" ] || [ "$extension" == "opus" ]; then
-		matchedTagsAlbumReleaseGroupId="$(echo $matchedTags | jq -r ".MUSICBRAINZ_RELEASEGROUPID")"
-		matchedTagsAlbumArtistId="$(echo $matchedTags | jq -r ".MUSICBRAINZ_ALBUMARTISTID")"
-	elif [ "$extension" == "mp3" ] || [ "$extension" == "m4a" ]; then
-		matchedTagsAlbumReleaseGroupId="$(echo $matchedTags | jq -r '."MusicBrainz Release Group Id"')"
-		matchedLidarrAlbumArtistId="$(echo $matchedTags | jq -r '."MusicBrainz Ablum Artist Id"')"
-	fi
-
-	if [ ! -d "/config/extended/logs/downloaded/musicbrainz_matched" ]; then
-		mkdir -p "/config/extended/logs/downloaded/musicbrainz_matched"
-		chmod 777 "/config/extended/logs/downloaded/musicbrainz_matched"
-	fi	
-
-	if [ ! -f "/config/extended/logs/downloaded/musicbrainz_matched/$matchedTagsAlbumReleaseGroupId" ]; then
-		log "$page :: $wantedAlbumListSource :: $processNumber of $wantedListAlbumTotal :: $lidarrArtistName :: $lidarrAlbumTitle :: $lidarrAlbumType :: Marking MusicBrainz Release Group ($matchedTagsAlbumReleaseGroupId) as successfully downloaded..."
-		touch "/config/extended/logs/downloaded/musicbrainz_matched/$matchedTagsAlbumReleaseGroupId"
-
-	fi
-	
 }
 
 DownloadQualityCheck () {
