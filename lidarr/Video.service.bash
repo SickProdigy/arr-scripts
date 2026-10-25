@@ -59,7 +59,7 @@ Configuration () {
 	log " Presents: $scriptName ($scriptVersion)"
 	log " May the beats be with you!"
 	log "-----------------------------------------------------------------------------"
-	log "Donate: https://sickgaming.net/donations"
+	log "Donate: https://sickgaming.net/donate"
 	log "Project: https://gitea.rcs1.top/sickprodigy/arr-scripts"
 	log "Support: https://gitea.rcs1.top/sickprodigy/arr-scripts/issues"
 	log "-----------------------------------------------------------------------------"
