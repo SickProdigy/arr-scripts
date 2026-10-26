@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import json
 import tempfile
 import time
 import unittest
@@ -45,6 +47,56 @@ class DashboardTests(unittest.TestCase):
                 self.assertTrue(status["server_configured"])
             finally:
                 DASHBOARD.SONICRATINGS_STATE_DIR = old
+
+    def test_musicbrainz_status_counts_only_pending_job_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_genres = DASHBOARD.MUSICBRAINZ_STATE_DIR
+            old_ratings = DASHBOARD.RATINGS_HELPER_STATE_DIR
+            genres = Path(directory) / "genres"
+            ratings = Path(directory) / "ratings"
+            (genres / "server" / "jobs").mkdir(parents=True)
+            (ratings / "server" / "jobs").mkdir(parents=True)
+            (genres / "history").mkdir()
+            (genres / "server" / "jobs" / "one.json").write_text("{}")
+            (genres / "history" / "not-pending.json").write_text("{}")
+            (ratings / "server" / "jobs" / "one.json").write_text("{}")
+            (ratings / "server" / "jobs" / "two.json").write_text("{}")
+            account_hash = hashlib.sha256(b"user").hexdigest()[:16]
+            (ratings / "server" / f"submitted-{account_hash}.json").write_text(
+                json.dumps({"recording-one": 4, "recording-two": 3}))
+            DASHBOARD.MUSICBRAINZ_STATE_DIR = genres
+            DASHBOARD.RATINGS_HELPER_STATE_DIR = ratings
+            try:
+                status = DASHBOARD.musicbrainz_status({
+                    "enableMusicBrainzHelper": "true", "musicBrainzUsername": "user",
+                    "musicBrainzPassword": "digest"})
+                self.assertEqual(status["genre_jobs"], 1)
+                self.assertEqual(status["rating_jobs"], 2)
+                self.assertEqual(status["pending_jobs"], 3)
+                self.assertEqual(status["submitted_ratings"], 2)
+                self.assertGreater(status["last_rating_submission"], 0)
+                self.assertNotIn("queued_files", status)
+            finally:
+                DASHBOARD.MUSICBRAINZ_STATE_DIR = old_genres
+                DASHBOARD.RATINGS_HELPER_STATE_DIR = old_ratings
+
+    def test_overview_reports_background_workflow_activity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_logs = DASHBOARD.LOG_DIR
+            DASHBOARD.LOG_DIR = Path(directory)
+            (DASHBOARD.LOG_DIR / "BeetsTagger-test.txt").write_text(
+                "Album :: Finished in 0 minutes and 8 seconds!\n", encoding="utf-8")
+            (DASHBOARD.LOG_DIR / "lyrics.log").write_text(
+                "Lyrics: embedded lyrics\n", encoding="utf-8")
+            try:
+                status = DASHBOARD.overview_status({
+                    "enableBeetsTagging": "true", "enableLyrics": "true",
+                    "enableReplaygainTags": "false", "enableSoulseek": "false"})
+                self.assertEqual(status["services"]["beets"]["detail"], "Album enrichment completed")
+                self.assertEqual(status["services"]["lyrics"]["detail"], "Lyrics embedded in a track")
+                self.assertFalse(status["services"]["replaygain"]["enabled"])
+            finally:
+                DASHBOARD.LOG_DIR = old_logs
 
     def test_configuration_masks_secrets_and_preserves_layout_on_save(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -100,6 +152,7 @@ class DashboardTests(unittest.TestCase):
     def test_interface_includes_overview_ratings_and_beets_editors(self):
         self.assertIn('data-page="overview"', DASHBOARD.HTML)
         self.assertIn('data-page="ratings"', DASHBOARD.HTML)
+        self.assertNotIn('id="overviewJobs"', DASHBOARD.HTML)
         self.assertNotIn('value="beets-download"', DASHBOARD.HTML)
         self.assertIn('value="beets"', DASHBOARD.HTML)
 
