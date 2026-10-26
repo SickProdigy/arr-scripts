@@ -151,10 +151,43 @@ class DashboardTests(unittest.TestCase):
 
     def test_interface_includes_overview_ratings_and_beets_editors(self):
         self.assertIn('data-page="overview"', DASHBOARD.HTML)
+        self.assertIn('data-page="streaming"', DASHBOARD.HTML)
         self.assertIn('data-page="ratings"', DASHBOARD.HTML)
         self.assertNotIn('id="overviewJobs"', DASHBOARD.HTML)
         self.assertNotIn('value="beets-download"', DASHBOARD.HTML)
         self.assertIn('value="beets"', DASHBOARD.HTML)
+
+    def test_streaming_auth_masks_tokens_and_saves_deezer_arl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_tidal = DASHBOARD.TIDAL_CONFIG_DIR
+            old_arl = DASHBOARD.DEEMIX_ARL_FILE
+            old_state = DASHBOARD.STATE_DIR
+            DASHBOARD.TIDAL_CONFIG_DIR = Path(directory) / "tidal"
+            DASHBOARD.DEEMIX_ARL_FILE = Path(directory) / "deemix" / ".arl"
+            DASHBOARD.STATE_DIR = Path(directory) / "dashboard"
+            config = Path(directory) / "extended.conf"
+            config.write_text("arlToken='' # Deezer cookie\n", encoding="utf-8")
+            arl = "a" * 192
+            try:
+                status = DASHBOARD.streaming_auth_status({"arlToken": ""})
+                self.assertFalse(status["tidal"]["configured"])
+                self.assertFalse(status["deezer"]["configured"])
+                DASHBOARD.save_deezer_arl(arl, config)
+                self.assertEqual(DASHBOARD.read_config(config)["arlToken"], arl)
+                self.assertEqual(DASHBOARD.DEEMIX_ARL_FILE.read_text(), arl)
+                with self.assertRaises(ValueError):
+                    DASHBOARD.save_deezer_arl("not-an-arl", config)
+            finally:
+                DASHBOARD.TIDAL_CONFIG_DIR = old_tidal
+                DASHBOARD.DEEMIX_ARL_FILE = old_arl
+                DASHBOARD.STATE_DIR = old_state
+
+    def test_tidal_redirect_requires_tidal_code_url(self):
+        auth = DASHBOARD.TidalAuth()
+        with self.assertRaises(ValueError):
+            auth.complete("https://example.com/?code=secret")
+        with self.assertRaises(ValueError):
+            auth.complete("https://tidal.com/android/login/auth")
 
     def test_replaygain_schedule_uses_success_interval_or_hourly_retry(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -180,6 +213,22 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(DASHBOARD.task_catalog("sonarr", {}), {})
         self.assertEqual(DASHBOARD.DEFAULT_PORTS, {
             "lidarr": 8687, "sonarr": 8990, "radarr": 7879, "readarr": 8788})
+
+    def test_catalog_submission_is_recorded_until_rescan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = DASHBOARD.MUSICBRAINZ_CATALOG_DIR
+            DASHBOARD.MUSICBRAINZ_CATALOG_DIR = Path(directory)
+            mbid = "11111111-2222-3333-4444-555555555555"
+            state = {"artists": {mbid: {"artist": "Test", "status": "review", "release_seeds": 2}}}
+            (Path(directory) / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            try:
+                record = DASHBOARD.mark_catalog_submitted(mbid)
+                self.assertEqual("awaiting-verification", record["status"])
+                status = DASHBOARD.musicbrainz_catalog_status({"enableMusicBrainzCatalog": "true"})
+                self.assertEqual(1, status["awaiting_count"])
+                self.assertEqual(0, status["review_count"])
+            finally:
+                DASHBOARD.MUSICBRAINZ_CATALOG_DIR = old
 
     def test_log_catalog_only_returns_real_log_files(self):
         with tempfile.TemporaryDirectory() as directory:

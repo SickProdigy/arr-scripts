@@ -35,7 +35,7 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(lyrics.audit(root, has), {
                 'scanned': 3, 'missing': 1, 'complete': 1, 'failed': 1})
 
-    def test_successful_scan_waits_a_week_and_failures_retry_after_an_hour(self):
+    def test_successful_scan_waits_thirty_days_and_failures_retry_after_an_hour(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); state = root/'state'; state.mkdir()
             queue = Mock(); queue.enqueue.return_value = 3
@@ -47,14 +47,14 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertEqual(queue.enqueue.call_count, 1)
                 queue.enqueue.side_effect = RuntimeError('unreadable file')
                 with self.assertRaises(RuntimeError):
-                    lyrics.maintenance(state, root, clock=lambda: 800000)
+                    lyrics.maintenance(state, root, clock=lambda: 2700000)
                 record = json.loads((state/'maintenance.json').read_text())
                 self.assertEqual(record['status'], 'failed')
                 self.assertIn('elapsed_seconds', record)
-                lyrics.maintenance(state, root, clock=lambda: 803599)
+                lyrics.maintenance(state, root, clock=lambda: 2703599)
                 self.assertEqual(queue.enqueue.call_count, 2)
                 queue.enqueue.side_effect = None
-                lyrics.maintenance(state, root, clock=lambda: 803600)
+                lyrics.maintenance(state, root, clock=lambda: 2703600)
                 self.assertEqual(queue.enqueue.call_count, 3)
 
     def test_invalid_root_interval_and_active_scan_do_not_enqueue(self):

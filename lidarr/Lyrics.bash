@@ -13,7 +13,7 @@ export LYRICS_ROOTS="${lyricsLibraryRoot:-/music}"
 helper="${ARR_LYRICS_WORKER:-/config/extended/python/Lyrics.py}"
 if [ "${1:-}" = --maintenance ]; then
     [ "${enableLyricsMaintenance:-false}" = true ] || exit 0
-    interval="${lyricsMaintenanceDays:-7}"
+    interval="${lyricsMaintenanceDays:-30}"
     [[ "$interval" =~ ^[1-9][0-9]*$ ]] || { echo 'Lyrics: invalid maintenance interval'; exit 2; }
     python3 "$helper" --maintenance "${lyricsLibraryRoot:-/music}" --maintenance-days "$interval"
     exit $?

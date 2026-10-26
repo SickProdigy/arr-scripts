@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bash
-scriptVersion="1.4.44"
+scriptVersion="1.4.45"
 SMA_PATH="/usr/local/sma"
 installDependencies="true"
 
@@ -113,9 +113,11 @@ parallel ::: \
 # Install helpers as pinned dependencies, like Beets; source stays in their projects.
 curl -sfL "${arrScriptsRawBase%/}/lidarr/MusicBrainzGenres.bash" -o /config/extended/MusicBrainzGenres.bash
 curl -sfL "${arrScriptsRawBase%/}/lidarr/MusicBrainzGenres.service.bash" -o /custom-services.d/MusicBrainzGenres
+curl -sfL "${arrScriptsRawBase%/}/lidarr/MusicBrainzCatalog.service.bash" -o /custom-services.d/MusicBrainzCatalog
 curl -sfL "${arrScriptsRawBase%/}/lidarr/InstallHelpers.bash" -o /config/extended/InstallHelpers.bash
 bash /config/extended/InstallHelpers.bash
 chmod +x /custom-services.d/MusicBrainzGenres
+chmod +x /custom-services.d/MusicBrainzCatalog
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Ratings.bash" -o /config/extended/Ratings.bash
 curl -sfL "${arrScriptsRawBase%/}/lidarr/Ratings.service.bash" -o /custom-services.d/Ratings
 chmod +x /custom-services.d/Ratings
@@ -131,6 +133,7 @@ curl -sfL "${arrScriptsRawBase%/}/lidarr/Lyrics.service.bash" -o /custom-service
 curl -sfL "${arrScriptsRawBase%/}/lidarr/python/Lyrics.py" -o /config/extended/python/Lyrics.py
 curl -sfL "${arrScriptsRawBase%/}/lidarr/python/ArtworkMigration.py" -o /config/extended/python/ArtworkMigration.py || exit 1
 curl -sfL "${arrScriptsRawBase%/}/lidarr/python/ReleaseGroups.py" -o /config/extended/python/ReleaseGroups.py || exit 1
+curl -sfL "${arrScriptsRawBase%/}/lidarr/python/MusicBrainzCatalog.py" -o /config/extended/python/MusicBrainzCatalog.py || exit 1
 chmod +x /custom-services.d/Lyrics
 curl -sfL "${arrScriptsRawBase%/}/lidarr/LyricsMaintenance.service.bash" -o /custom-services.d/LyricsMaintenance || exit 1
 chmod +x /custom-services.d/LyricsMaintenance

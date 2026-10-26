@@ -28,7 +28,10 @@ DEFAULT_PORTS = {"lidarr": 8687, "sonarr": 8990, "radarr": 7879, "readarr": 8788
 REPLAYGAIN_STATE_DIR = Path(os.environ.get("REPLAYGAIN_STATE_DIR", "/config/extended/replaygain"))
 SONICRATINGS_STATE_DIR = Path(os.environ.get("SONICRATINGS_STATE_DIR", "/config/extended/sonicratings"))
 MUSICBRAINZ_STATE_DIR = Path(os.environ.get("MUSICBRAINZ_STATE_DIR", "/config/extended/musicbrainz-helper"))
+MUSICBRAINZ_CATALOG_DIR = Path(os.environ.get("MUSICBRAINZ_CATALOG_STATE", str(MUSICBRAINZ_STATE_DIR / "catalog")))
 RATINGS_HELPER_STATE_DIR = Path(os.environ.get("RATINGS_HELPER_STATE_DIR", "/config/extended/ratings-helper"))
+TIDAL_CONFIG_DIR = Path(os.environ.get("TIDAL_CONFIG_DIR", "/config/extended/tidal_dl_sg"))
+DEEMIX_ARL_FILE = Path(os.environ.get("DEEMIX_ARL_FILE", "/config/xdg/deemix/.arl"))
 CONFIG_FILES = {
     "beets": (Path("/config/extended/beets-config.yaml"), "Beets - post-import enrichment"),
     "genre-whitelist": (Path("/config/extended/beets-genre-whitelist.txt"), "Beets genre whitelist"),
@@ -38,7 +41,7 @@ CONFIG_GROUPS = (
     ("Dashboard", ("enableDashboard", "dashboardBindAddress", "dashboardPort", "dashboardUsername", "dashboardPassword", "dashboardPreviewMaxAgeHours")),
     ("ReplayGain", ("enableReplaygainTags", "enableReplaygainMaintenance", "replaygainMaintenanceDays", "replaygainTargetLoudness", "replaygainThreads", "replaygainPreserveMtime", "replaygainClipMode", "replaygainTruePeak", "replaygainMaxPeak")),
     ("Lyrics", ("enableLyrics", "enableLyricsMaintenance", "lyricsMaintenanceDays", "lyricsLibraryRoot", "lyricsTimeout", "lyricsUrl")),
-    ("MusicBrainz", ("enableMusicBrainzHelper", "musicBrainzUsername", "musicBrainzPassword", "musicBrainzToken", "musicBrainzOAuthClientId", "musicBrainzOAuthClientSecret", "musicBrainzOAuthRedirectUri")),
+    ("MusicBrainz", ("enableMusicBrainzHelper", "musicBrainzUsername", "musicBrainzPassword", "musicBrainzToken", "musicBrainzOAuthClientId", "musicBrainzOAuthClientSecret", "musicBrainzOAuthRedirectUri", "enableMusicBrainzCatalog", "musicBrainzCatalogBatchSize", "musicBrainzCatalogDays", "musicBrainzCatalogCountry")),
     ("Ratings", ("enableRatings", "subsonicUrl", "subsonicUsername", "subsonicPassword", "lastfmApiKey", "ratingsProvider", "spotifyClientId", "spotifyClientSecret", "tidalClientId", "tidalClientSecret", "discogsToken", "discogsInheritAlbumRating")),
     ("Soulseek", ("enableSoulseek", "soulseekClient", "soulseekUrl", "soulseekApiKey", "soulseekDownloadPath", "soulseekMaxBatches", "soulseekMaxForegroundBatches")),
     ("Library maintenance", ("enableLibraryMaintenance", "libraryMaintenanceDays", "libraryMaintenanceDateAudit", "libraryMaintenanceRoot")),
@@ -288,6 +291,13 @@ def lidarr_tasks(config):
         "command": ["bash", "/config/extended/MusicBrainzGenres.bash", "--work"],
         "description": "Submit the exact-MBID genre changes shown by the latest preview.",
     }
+    tasks["musicbrainz-catalog-scan"] = {
+        "name": "Scan missing catalog entries", "kind": "preview", "section": "musicbrainz",
+        "workflow": "Missing catalog entries", "action": "Scan next batch",
+        "enabled": musicbrainz and truthy(config.get("enableMusicBrainzCatalog")),
+        "command": ["python3", "/config/extended/python/MusicBrainzCatalog.py", "--force"],
+        "description": "Compare the next monitored Lidarr artists with Apple Music and prepare review-only MusicBrainz editor reports.",
+    }
     return tasks
 
 
@@ -342,6 +352,7 @@ def musicbrainz_status(config):
                 last_rating_submission = current.stat().st_mtime
             except (OSError, ValueError):
                 pass
+    catalog = musicbrainz_catalog_status(config)
     return {"enabled": truthy(config.get("enableMusicBrainzHelper")),
             "username": username,
             "authenticated": digest or oauth,
@@ -349,7 +360,53 @@ def musicbrainz_status(config):
             "genre_jobs": genre_jobs, "rating_jobs": rating_jobs,
             "pending_jobs": genre_jobs + rating_jobs,
             "submitted_ratings": submitted_ratings,
-            "last_rating_submission": last_rating_submission}
+            "last_rating_submission": last_rating_submission,
+            "catalog": catalog}
+
+
+def musicbrainz_catalog_status(config):
+    try:
+        state = json.loads((MUSICBRAINZ_CATALOG_DIR / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    rows = []
+    for mbid, record in (state.get("artists") or {}).items():
+        if not isinstance(record, dict) or record.get("status") not in {"review", "awaiting-verification", "current", "error"}:
+            continue
+        rows.append({"mbid": mbid, "artist": record.get("artist", mbid),
+                     "status": record.get("status"), "release_seeds": record.get("release_seeds", 0),
+                     "apple_releases": record.get("apple_releases", 0),
+                     "musicbrainz_releases": record.get("musicbrainz_releases", 0),
+                     "scanned_at": record.get("scanned_at", 0), "error": record.get("error", ""),
+                     "submitted_at": record.get("submitted_at", 0),
+                     "report": bool(record.get("report"))})
+    rows.sort(key=lambda row: (row["status"] != "review", -int(row["scanned_at"] or 0)))
+    return {"enabled": truthy(config.get("enableMusicBrainzCatalog")),
+            "last_run": state.get("last_run", 0), "monitored_artists": state.get("monitored_artists", 0),
+            "eligible_artists": state.get("eligible_artists", 0),
+            "missing_apple_links": state.get("missing_apple_links", 0),
+            "review_count": sum(1 for row in rows if row["status"] == "review"),
+            "awaiting_count": sum(1 for row in rows if row["status"] == "awaiting-verification"),
+            "artists": rows[:100]}
+
+
+def mark_catalog_submitted(mbid):
+    if not isinstance(mbid, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", mbid):
+        raise ValueError("Unknown catalog report")
+    state_file = MUSICBRAINZ_CATALOG_DIR / "state.json"
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("Catalog scan state is unavailable") from error
+    record = (state.get("artists") or {}).get(mbid)
+    if not isinstance(record, dict) or record.get("status") not in {"review", "awaiting-verification"}:
+        raise ValueError("This artist has no missing catalog report to mark")
+    record["status"] = "awaiting-verification"
+    record["submitted_at"] = int(time.time())
+    staged = state_file.with_suffix(".json.tmp")
+    staged.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(staged, state_file)
+    return record
 
 
 def ratings_status(config):
@@ -435,6 +492,105 @@ def overview_status(config):
     }
     return {"services": services, "ratings": ratings_status(config),
             "musicbrainz": musicbrainz_status(config)}
+
+
+def streaming_auth_status(config, tidal_auth=None):
+    tidal = tidal_auth.status() if tidal_auth else {"state": "idle", "authorization_url": "", "message": ""}
+    tidal["configured"] = (TIDAL_CONFIG_DIR / "token.json").is_file()
+    return {"tidal": tidal, "deezer": {"configured": bool(config.get("arlToken"))}}
+
+
+def save_deezer_arl(arl, path=CONFIG):
+    if not isinstance(arl, str) or not re.fullmatch(r"[A-Fa-f0-9]{192}", arl.strip()):
+        raise ValueError("Deezer ARL must be the 192-character hexadecimal cookie value")
+    arl = arl.strip()
+    backup = update_configuration({"arlToken": arl}, path)
+    DEEMIX_ARL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    staged = DEEMIX_ARL_FILE.with_suffix(".tmp")
+    staged.write_text(arl, encoding="ascii")
+    os.chmod(staged, 0o600)
+    os.replace(staged, DEEMIX_ARL_FILE)
+    return backup
+
+
+class TidalAuth:
+    """Keep the interactive PKCE exchange in memory; never persist redirect codes."""
+    URL = re.compile(r"https://login\.tidal\.com/authorize\?[^\s<>'\"]+")
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.process = None
+        self.state = "idle"
+        self.authorization_url = ""
+        self.message = ""
+        self.output = ""
+
+    def status(self):
+        with self.lock:
+            return {"state": self.state, "authorization_url": self.authorization_url,
+                    "message": self.message}
+
+    def start(self):
+        with self.lock:
+            if self.process and self.process.poll() is None:
+                raise ValueError("A TIDAL login is already in progress")
+            command = shutil.which("tidal-dl-sg")
+            if not command:
+                raise ValueError("tidal-dl-sg is not installed")
+            env = os.environ.copy()
+            env.update(XDG_CONFIG_HOME="/config/extended", PYTHONUNBUFFERED="1")
+            self.state, self.authorization_url = "starting", ""
+            self.message, self.output = "Starting TIDAL login…", ""
+            self.process = subprocess.Popen([command, "login"], stdin=subprocess.PIPE,
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                            cwd="/config", env=env, text=True, bufsize=0,
+                                            start_new_session=True)
+            threading.Thread(target=self._read, args=(self.process,), daemon=True).start()
+            return self.status()
+
+    def _read(self, process):
+        while True:
+            chunk = process.stdout.read(1)
+            if not chunk:
+                break
+            with self.lock:
+                self.output = (self.output + chunk)[-32768:]
+                match = self.URL.search(self.output)
+                if match and not self.authorization_url:
+                    self.authorization_url = match.group(0)
+                    self.state = "waiting"
+                    self.message = "Sign in to TIDAL, then paste the final Oops-page URL below."
+        code = process.wait()
+        with self.lock:
+            if code == 0 and (TIDAL_CONFIG_DIR / "token.json").is_file():
+                self.state, self.message = "connected", "TIDAL login completed and the token was saved."
+            elif self.state != "cancelled":
+                self.state, self.message = "failed", "TIDAL login failed; start it again and use a fresh redirect URL."
+            self.process = None
+
+    def complete(self, redirect_url):
+        if not isinstance(redirect_url, str) or len(redirect_url) > 4096:
+            raise ValueError("Invalid TIDAL redirect URL")
+        parsed = urlparse(redirect_url.strip())
+        if parsed.scheme != "https" or parsed.netloc.casefold() != "tidal.com" or not parse_qs(parsed.query).get("code"):
+            raise ValueError("Paste the complete https://tidal.com Oops-page URL containing the authorization code")
+        with self.lock:
+            if not self.process or self.process.poll() is not None or self.state != "waiting":
+                raise ValueError("Start a TIDAL login before submitting the redirect URL")
+            self.state, self.message = "finishing", "Finishing TIDAL login…"
+            try:
+                self.process.stdin.write(redirect_url.strip() + "\n")
+                self.process.stdin.flush()
+            except (BrokenPipeError, OSError) as error:
+                raise ValueError("The TIDAL login process stopped; start it again") from error
+            return self.status()
+
+    def stop(self):
+        with self.lock:
+            if self.process and self.process.poll() is None:
+                os.killpg(self.process.pid, signal.SIGTERM)
+            self.state, self.message = "cancelled", "TIDAL login cancelled."
+            self.authorization_url = ""
 
 
 class JobStore:
@@ -526,7 +682,7 @@ class JobStore:
             return 0
 
     def _replaygain_schedule(self):
-        days = positive_int(self.config.get("replaygainMaintenanceDays"), 7)
+        days = positive_int(self.config.get("replaygainMaintenanceDays"), 30)
         attempt = self._stamp(REPLAYGAIN_STATE_DIR / "maintenance.last-attempt")
         success = self._stamp(REPLAYGAIN_STATE_DIR / "maintenance.last-success")
         successful = bool(attempt and success >= attempt)
@@ -620,6 +776,7 @@ HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 </style></head><body><div class="shell"><header class="top"><button class="mobile-menu" onclick="document.querySelector('aside').classList.toggle('open')">☰</button><div class="brand">arr-scripts</div><div class="appname" id="app"></div><a class="donate" href="https://sickgaming.net/donate" target="_blank" rel="noopener noreferrer" title="Donate to SickGaming" aria-label="Donate to SickGaming">♥</a></header><aside>
 <button class="nav active" data-page="overview"><span class="icon">⌂</span>Overview</button>
 <button class="nav" data-page="tasks"><span class="icon">◷</span>Tasks</button>
+<button class="nav" data-page="streaming"><span class="icon">▶</span>Streaming</button>
 <button class="nav" data-page="ratings"><span class="icon">★</span>Ratings</button>
 <button class="nav" data-page="musicbrainz"><span class="icon">♫</span>MusicBrainz</button>
 <button class="nav" data-page="configuration"><span class="icon">⚙</span>Configuration</button>
@@ -628,8 +785,9 @@ HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 </aside><main class="content"><div id="notice" class="notice"></div>
 <section id="overview" class="page active"><h1>Overview</h1><div class="muted">Current Lidarr automation, queues, and recent activity</div><div class="cards" id="overviewCards"></div></section>
 <section id="tasks" class="page"><h1>Tasks</h1><div class="muted">Scheduled maintenance and manual library workflows</div><h2>Scheduled</h2><table><thead><tr><th>Name</th><th>Interval</th><th>Last execution</th><th class="hide-mobile">Last duration</th><th>Next execution</th><th></th></tr></thead><tbody id="scheduled"></tbody></table><h2>Manual workflows</h2><table><thead><tr><th>Name</th><th>Last execution</th><th>Status</th><th></th></tr></thead><tbody id="manual"></tbody></table><h2>Queue</h2><table><thead><tr><th>Name</th><th>Status</th><th>Started</th><th>Duration</th><th></th></tr></thead><tbody id="jobs"></tbody></table></section>
+<section id="streaming" class="page"><h1>Streaming accounts</h1><div class="muted">Connect the accounts used by Lidarr's streaming download providers</div><div class="cards" id="streamingCards"></div></section>
 <section id="ratings" class="page"><h1>Ratings</h1><div class="muted">SonicRatings imports provider ratings into Navidrome or another Subsonic server</div><div class="cards" id="ratingsStatus"></div><h2>Rating workflows</h2><table><tbody id="ratingsTasks"></tbody></table></section>
-<section id="musicbrainz" class="page"><h1>MusicBrainz</h1><div class="muted">Contribute metadata from monitored Lidarr music with review before submission</div><div class="cards" id="mbStatus"></div><h2>Contribution workflows</h2><table><tbody id="mbTasks"></tbody></table><h2>Missing catalog entries</h2><div class="card"><strong>Monitored artist and release review queue</strong><p class="muted">The dashboard will compare Lidarr’s monitored catalog with MusicBrainz and prepare seeded editor links here. Full artist and release additions always require review in MusicBrainz.</p><span class="pill">Backend pending</span></div></section>
+<section id="musicbrainz" class="page"><h1>MusicBrainz</h1><div class="muted">Contribute metadata from monitored Lidarr music with review before submission</div><div class="cards" id="mbStatus"></div><h2>Contribution workflows</h2><table><tbody id="mbTasks"></tbody></table><h2>Missing catalog entries</h2><div class="cards" id="catalogStatus"></div><table><thead><tr><th>Artist</th><th>Catalog comparison</th><th>Last scan</th><th></th></tr></thead><tbody id="catalogRows"></tbody></table></section>
 <section id="configuration" class="page"><h1>Configuration</h1><div class="muted">Edit arr-scripts and Beets configuration. A timestamped backup is created on every save.</div><div class="toolbar"><select id="configFile" onchange="renderConfig()"><option value="extended">extended.conf settings</option><option value="beets">Beets - post-import enrichment</option><option value="genre-whitelist">Beets genre whitelist</option></select><span class="muted" id="configState"></span></div><div id="config"></div><textarea id="configEditor" class="editor" hidden spellcheck="false"></textarea><div class="toolbar"><button class="primary" onclick="saveConfig()">Save changes</button></div></section>
 <section id="logs" class="page"><h1>Logs</h1><div class="toolbar"><select id="logSelect"></select><input id="logFilter" placeholder="Filter displayed log" oninput="renderLog()"><button onclick="loadLog()">Refresh</button></div><pre id="log">Select a log.</pre></section>
 </main></div><script>
@@ -648,18 +806,25 @@ function jobRows(jobs,empty='No dashboard jobs yet.'){return jobs.map(j=>`<tr><t
 function renderTasks(){const scheduled=state.tasks.filter(t=>t.section==='tasks'&&t.interval!=='Manual');document.querySelector('#scheduled').innerHTML=scheduled.map(t=>`<tr><td>${esc(t.workflow)}<div class="muted">${esc(t.enabled?'Enabled':'Disabled')}</div></td><td>${esc(t.interval)}</td><td>${when(t.last_execution)}</td><td class="hide-mobile">${duration(t.last_duration)}</td><td>${t.enabled?relative(t.next_execution):'-'}</td><td>${taskButtons([t])}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No scheduled tasks are configured.</td></tr>';const groups=workflows('tasks');document.querySelector('#manual').innerHTML=Object.entries(groups).filter(([,ts])=>!ts.some(t=>t.interval!=='Manual')).map(([name,ts])=>{const last=ts.reduce((a,t)=>t.last_execution>(a?.last_execution||0)?t:a,null);return `<tr><td>${esc(name)}<div class="muted">${esc(ts[0].description)}</div></td><td>${when(last?.last_execution)}</td><td class="${esc(last?.last_status||'')}">${esc(last?.last_status||'Never run')}</td><td>${taskButtons(ts)}</td></tr>`}).join('')||'<tr><td colspan="4" class="empty">No manual workflows available.</td></tr>';document.querySelector('#jobs').innerHTML=state.jobs.map(j=>`<tr><td>${esc(j.name)}</td><td class="${esc(j.status)}">${esc(j.status)}</td><td>${when(j.started)}</td><td>${duration((j.ended||Date.now()/1000)-j.started)}</td><td><button onclick="showJob('${esc(j.id)}')">Log</button>${j.status==='running'?` <button onclick="stop('${esc(j.id)}')">Stop</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">No dashboard jobs yet.</td></tr>'}
 const activity=(name,item)=>`<div class="activity-row"><b>${esc(name)}</b> <span class="${item.enabled?'completed':'failed'}">${item.enabled?'On':'Off'}</span><div class="muted">${esc(item.detail)}${item.last_activity?' · '+relative(item.last_activity):''}</div></div>`;
 async function renderOverview(){try{const o=await api('/api/overview'),r=o.ratings,m=o.musicbrainz,s=o.services,running=state.jobs.filter(j=>j.status==='running').length,enabled=state.tasks.filter(t=>t.enabled).length;document.querySelector('#overviewCards').innerHTML=`<div class="card"><strong>Dashboard jobs</strong><div class="metric ${running?'running':'completed'}">${running?running+' running':'Idle'}</div><span class="muted">${enabled} available actions</span></div><div class="card"><strong>Downloads</strong>${activity('Soulseek',s.soulseek)}</div><div class="card"><strong>Post-import processing</strong>${activity('Beets',s.beets)}${activity('Lyrics',s.lyrics)}${activity('ReplayGain',s.replaygain)}</div><div class="card"><strong>SonicRatings</strong><div class="metric ${r.enabled?'completed':'failed'}">${r.pending_jobs} waiting</div><span class="muted">Imported albums · ${esc(providerOrder(r.providers))}${r.last_activity?' · '+relative(r.last_activity):''}</span></div><div class="card"><strong>MusicBrainz contributions</strong><div class="metric ${m.enabled&&m.authenticated?'completed':'failed'}">${m.submitted_ratings} ratings submitted</div><span class="muted">${m.genre_jobs} genre jobs · ${m.rating_jobs} rating jobs waiting${m.last_rating_submission?' · last submission '+relative(m.last_rating_submission):''}</span></div>`}catch(e){note(e.message)}}
+async function renderStreaming(){try{const s=await api('/api/streaming-auth'),t=s.tidal,d=s.deezer,busy=['starting','waiting','finishing'].includes(t.state);document.querySelector('#streamingCards').innerHTML=`<div class="card"><strong>TIDAL</strong><div class="metric ${t.configured?'completed':'failed'}">${t.configured?'Connected':'Not connected'}</div><p class="muted">${esc(t.message||'Use browser-based PKCE login. No password is stored by arr-scripts.')}</p>${t.authorization_url?`<p><a target="_blank" rel="noopener noreferrer" href="${esc(t.authorization_url)}">Open TIDAL login</a></p><div class="field"><label>Final Oops-page URL<small>After signing in, copy the complete URL from the browser address bar.</small></label><div class="secret-row"><input id="tidalRedirect" type="password" autocomplete="off" placeholder="https://tidal.com/android/login/auth?code=…"><button class="primary" onclick="finishTidal()">Complete login</button></div></div>`:''}<div class="actions" style="justify-content:flex-start"><button class="primary" ${busy?'disabled':''} onclick="startTidal()">${t.configured?'Reconnect TIDAL':'Connect TIDAL'}</button>${busy?'<button onclick="cancelTidal()">Cancel</button>':''}</div></div><div class="card"><strong>Deezer</strong><div class="metric ${d.configured?'completed':'failed'}">${d.configured?'ARL configured':'Not connected'}</div><p class="muted">Deezer does not provide this downloader with a browser OAuth callback. Sign in to Deezer, copy the ARL cookie value, and save it here.</p><p><a target="_blank" rel="noopener noreferrer" href="https://www.deezer.com/login">Open Deezer login</a></p><div class="field"><label>ARL cookie<small>Stored in extended.conf and Deemix with restricted file permissions.</small></label><div class="secret-row"><input id="deezerArl" type="password" autocomplete="off" maxlength="192" placeholder="192-character ARL"><button class="primary" onclick="saveDeezer()">Save ARL</button></div></div></div>`}catch(e){note(e.message)}}
+async function startTidal(){try{const d=await api('/api/streaming-auth/tidal/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});note(d.message||'TIDAL login started');await pollTidal()}catch(e){note(e.message)}}
+async function pollTidal(){for(let i=0;i<30;i++){await new Promise(r=>setTimeout(r,1000));await renderStreaming();const s=await api('/api/streaming-auth');if(!['starting','finishing'].includes(s.tidal.state))break}}
+async function finishTidal(){const value=document.querySelector('#tidalRedirect')?.value||'';try{const d=await api('/api/streaming-auth/tidal/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({redirect_url:value})});note(d.message);await pollTidal()}catch(e){note(e.message)}}
+async function cancelTidal(){try{await api('/api/streaming-auth/tidal/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await renderStreaming()}catch(e){note(e.message)}}
+async function saveDeezer(){const value=document.querySelector('#deezerArl')?.value||'';try{await api('/api/streaming-auth/deezer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({arl:value})});note('Deezer ARL saved');await renderStreaming()}catch(e){note(e.message)}}
 async function renderRatings(){try{const r=await api('/api/ratings');document.querySelector('#ratingsStatus').innerHTML=`<div class="card"><strong>Automation</strong><span class="${r.enabled?'completed':'failed'}">${r.enabled?'Enabled':'Disabled'}</span></div><div class="card"><strong>Subsonic server</strong><span class="${r.server_configured?'completed':'failed'}">${r.server_configured?'Configured':'Not configured'}</span></div><div class="card"><strong>Fallback order</strong>${esc(providerOrder(r.providers))}</div><div class="card"><strong>Pending imported albums</strong><span class="metric">${r.pending_jobs}</span></div><div class="card"><strong>Last activity</strong>${when(r.last_activity)}</div>`;document.querySelector('#ratingsTasks').innerHTML=Object.entries(workflows('ratings')).map(([name,ts])=>`<tr><td>${esc(name)}<div class="muted">${esc(ts[0].description)}</div></td><td>${taskButtons(ts)}</td></tr>`).join('')||'<tr><td class="empty">No rating workflows available.</td></tr>'}catch(e){note(e.message)}}
-async function renderMusicBrainz(){try{const m=await api('/api/musicbrainz');document.querySelector('#mbStatus').innerHTML=`<div class="card"><strong>Helper</strong><span class="${m.enabled?'completed':'failed'}">${m.enabled?'Enabled':'Disabled'}</span></div><div class="card"><strong>Account</strong>${esc(m.username||'Not configured')}</div><div class="card"><strong>Authentication</strong><span class="${m.authenticated?'completed':'failed'}">${esc(m.authentication)}</span></div><div class="card"><strong>Submitted recording ratings</strong><span class="metric">${m.submitted_ratings}</span><span class="muted">${m.last_rating_submission?'Last submission '+relative(m.last_rating_submission):'No submissions recorded'}</span></div><div class="card"><strong>Pending genre jobs</strong><span class="metric">${m.genre_jobs}</span></div><div class="card"><strong>Pending rating jobs</strong><span class="metric">${m.rating_jobs}</span></div>`;document.querySelector('#mbTasks').innerHTML=Object.entries(workflows('musicbrainz')).map(([name,ts])=>`<tr><td>${esc(name)}<div class="muted">${esc(ts[0].description)}</div></td><td>${taskButtons(ts)}</td></tr>`).join('')}catch(e){note(e.message)}}
+async function renderMusicBrainz(){try{const m=await api('/api/musicbrainz'),c=m.catalog;document.querySelector('#mbStatus').innerHTML=`<div class="card"><strong>Helper</strong><span class="${m.enabled?'completed':'failed'}">${m.enabled?'Enabled':'Disabled'}</span></div><div class="card"><strong>Account</strong>${esc(m.username||'Not configured')}</div><div class="card"><strong>Authentication</strong><span class="${m.authenticated?'completed':'failed'}">${esc(m.authentication)}</span></div><div class="card"><strong>Submitted recording ratings</strong><span class="metric">${m.submitted_ratings}</span><span class="muted">${m.last_rating_submission?'Last submission '+relative(m.last_rating_submission):'No submissions recorded'}</span></div><div class="card"><strong>Pending genre jobs</strong><span class="metric">${m.genre_jobs}</span></div><div class="card"><strong>Pending rating jobs</strong><span class="metric">${m.rating_jobs}</span></div>`;document.querySelector('#mbTasks').innerHTML=Object.entries(workflows('musicbrainz')).map(([name,ts])=>`<tr><td>${esc(name)}<div class="muted">${esc(ts[0].description)}</div></td><td>${taskButtons(ts)}</td></tr>`).join('');document.querySelector('#catalogStatus').innerHTML=`<div class="card"><strong>Catalog scan</strong><span class="${c.enabled?'completed':'failed'}">${c.enabled?'Enabled':'Disabled'}</span><div class="muted">${c.last_run?'Last run '+relative(c.last_run):'Not run yet'}</div></div><div class="card"><strong>Ready for review</strong><span class="metric">${c.review_count}</span><span class="muted">${c.awaiting_count} awaiting verification</span></div><div class="card"><strong>Eligible monitored artists</strong><span class="metric">${c.eligible_artists}</span><span class="muted">${c.missing_apple_links} without Apple Music links</span></div>`;document.querySelector('#catalogRows').innerHTML=c.artists.map(r=>`<tr><td>${esc(r.artist)}<div class="muted">${esc(r.mbid)}</div></td><td><span class="${r.status==='error'?'failed':r.status==='review'?'running':'completed'}">${r.status==='review'?r.release_seeds+' possible missing':r.status==='awaiting-verification'?'Awaiting MusicBrainz verification':r.status==='current'?'No missing releases':'Scan failed'}</span><div class="muted">${r.apple_releases} Apple Music · ${r.musicbrainz_releases} exact MusicBrainz${r.submitted_at?' · marked submitted '+relative(r.submitted_at):''}${r.error?' · '+esc(r.error):''}</div></td><td>${when(r.scanned_at)}</td><td>${r.report?`<a class="button" target="_blank" rel="noopener noreferrer" href="/api/musicbrainz-catalog/report?id=${encodeURIComponent(r.mbid)}">Review</a>`:''}${r.status==='review'?` <button onclick="markCatalogSubmitted('${esc(r.mbid)}')">Mark submitted</button>`:''}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">No artists have been scanned yet. Enable catalog review, then scan the first batch.</td></tr>'}catch(e){note(e.message)}}
+async function markCatalogSubmitted(mbid){try{await api('/api/musicbrainz-catalog/submitted',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mbid})});note('Marked submitted; the next scan will verify MusicBrainz.');await renderMusicBrainz()}catch(e){note(e.message)}}
 async function renderConfig(){try{const selected=document.querySelector('#configFile').value,form=document.querySelector('#config'),editor=document.querySelector('#configEditor');configChanges={};document.querySelector('#configState').textContent='';if(selected==='extended'){const d=await api('/api/config');editor.hidden=true;form.hidden=false;form.innerHTML=d.groups.map(g=>`<div class="config-group"><h2>${esc(g.name)}</h2>${g.fields.map(f=>`<div class="field"><label>${esc(f.name)}<small>${esc(f.description)}</small></label>${f.secret?`<div class="secret-row"><input type="password" data-key="${esc(f.name)}" placeholder="${f.configured?'Configured — enter to replace':'Not configured'}"><button onclick="clearSecret('${esc(f.name)}')">Clear</button></div>`:`<input data-key="${esc(f.name)}" value="${esc(f.value)}">`}</div>`).join('')}</div>`).join('');document.querySelectorAll('[data-key]').forEach(e=>e.addEventListener('input',()=>{configChanges[e.dataset.key]=e.value;document.querySelector('#configState').textContent='Unsaved changes'}))}else{const d=await api('/api/config-file?name='+encodeURIComponent(selected));form.hidden=true;editor.hidden=false;editor.value=d.content;configFileContent=d.content;editor.oninput=()=>document.querySelector('#configState').textContent=editor.value===configFileContent?'':'Unsaved changes'}}catch(e){note(e.message)}}
 function clearSecret(key){configChanges[key]='';const e=document.querySelector(`[data-key="${CSS.escape(key)}"]`);if(e)e.value='';document.querySelector('#configState').textContent='Secret will be cleared'}
 async function saveConfig(){const selected=document.querySelector('#configFile').value;try{let d;if(selected==='extended'){if(!Object.keys(configChanges).length)return note('No configuration changes');d=await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({changes:configChanges})})}else{const content=document.querySelector('#configEditor').value;if(content===configFileContent)return note('No configuration changes');d=await api('/api/config-file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:selected,content})})}note('Configuration saved; backup: '+d.backup);await renderConfig();await refresh()}catch(e){note(e.message)}}
 async function start(id){try{await api('/api/jobs/'+encodeURIComponent(id),{method:'POST'});await refresh()}catch(e){note(e.message)}}
 async function stop(id){try{await api('/api/jobs/'+encodeURIComponent(id)+'/stop',{method:'POST'});await refresh()}catch(e){note(e.message)}}
-async function refresh(){try{state=await api('/api/status');document.querySelector('#app').textContent=state.app.toUpperCase();document.querySelector('#updated').textContent='Updated '+new Date().toLocaleTimeString();renderTasks();const s=document.querySelector('#logSelect'),old=s.value;s.innerHTML=Object.entries(state.logs).map(([id,name])=>`<option value="${esc(id)}">${esc(name)}</option>`).join('');if([...s.options].some(o=>o.value===old))s.value=old;if(document.querySelector('#overview').classList.contains('active'))renderOverview();if(document.querySelector('#ratings').classList.contains('active'))renderRatings();if(document.querySelector('#musicbrainz').classList.contains('active'))renderMusicBrainz()}catch(e){note(e.message)}}
+async function refresh(){try{state=await api('/api/status');document.querySelector('#app').textContent=state.app.toUpperCase();document.querySelector('#updated').textContent='Updated '+new Date().toLocaleTimeString();renderTasks();const s=document.querySelector('#logSelect'),old=s.value;s.innerHTML=Object.entries(state.logs).map(([id,name])=>`<option value="${esc(id)}">${esc(name)}</option>`).join('');if([...s.options].some(o=>o.value===old))s.value=old;if(document.querySelector('#overview').classList.contains('active'))renderOverview();if(document.querySelector('#streaming').classList.contains('active'))renderStreaming();if(document.querySelector('#ratings').classList.contains('active'))renderRatings();if(document.querySelector('#musicbrainz').classList.contains('active'))renderMusicBrainz()}catch(e){note(e.message)}}
 async function loadLog(){try{activeJobLog='';const id=document.querySelector('#logSelect').value;if(!id)return;rawLog=(await api('/api/log?name='+encodeURIComponent(id)+'&lines=500')).content||'Log is empty or has not been created.';renderLog()}catch(e){note(e.message)}}
 function renderLog(){const q=document.querySelector('#logFilter').value.toLowerCase();const text=q?rawLog.split('\n').filter(line=>line.toLowerCase().includes(q)).join('\n'):rawLog;const p=document.querySelector('#log');p.textContent=text;p.scrollTop=p.scrollHeight}
 async function showJob(id){showPage('logs');try{activeJobLog=id;rawLog=(await api('/api/job-log?id='+encodeURIComponent(id)+'&lines=500')).content||'Log is empty.';renderLog()}catch(e){note(e.message)}}
-function showPage(page){if(!document.getElementById(page))page='overview';document.querySelectorAll('.page').forEach(e=>e.classList.toggle('active',e.id===page));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===page));location.hash=page;document.querySelector('aside').classList.remove('open');if(page==='overview')renderOverview();if(page==='ratings')renderRatings();if(page==='configuration')renderConfig();if(page==='musicbrainz')renderMusicBrainz();if(page==='logs'&&!rawLog)loadLog()}
+function showPage(page){if(!document.getElementById(page))page='overview';document.querySelectorAll('.page').forEach(e=>e.classList.toggle('active',e.id===page));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===page));location.hash=page;document.querySelector('aside').classList.remove('open');if(page==='overview')renderOverview();if(page==='streaming')renderStreaming();if(page==='ratings')renderRatings();if(page==='configuration')renderConfig();if(page==='musicbrainz')renderMusicBrainz();if(page==='logs'&&!rawLog)loadLog()}
 document.querySelectorAll('.nav').forEach(e=>e.onclick=()=>showPage(e.dataset.page));showPage(location.hash.slice(1)||'overview');refresh();setInterval(()=>{refresh();if(document.querySelector('#logs').classList.contains('active')){if(activeJobLog)showJob(activeJobLog);else if(document.querySelector('#logSelect').value)loadLog()}},5000);
 </script></body></html>'''
 
@@ -689,14 +854,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         return False
 
-    def _send(self, value, status=HTTPStatus.OK, content_type="application/json"):
+    def _send(self, value, status=HTTPStatus.OK, content_type="application/json", csp=None):
         body = value.encode() if isinstance(value, str) else json.dumps(value).encode()
         self.send_response(status)
         self.send_header("Content-Type", content_type + "; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+        self.send_header("Content-Security-Policy", csp or "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
         self.end_headers()
         self.wfile.write(body)
 
@@ -745,8 +910,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(ratings_status(self.server.config))
         if parsed.path == "/api/musicbrainz":
             return self._send(musicbrainz_status(self.server.config))
+        if parsed.path == "/api/musicbrainz-catalog/report":
+            mbid = query.get("id", [""])[0]
+            if not re.fullmatch(r"[0-9a-fA-F-]{36}", mbid):
+                return self._send({"error": "Unknown report"}, HTTPStatus.NOT_FOUND)
+            try:
+                return self._send((MUSICBRAINZ_CATALOG_DIR / (mbid + ".html")).read_text(encoding="utf-8"),
+                                  content_type="text/html",
+                                  csp="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src https: data:; form-action https://musicbrainz.org")
+            except OSError:
+                return self._send({"error": "Report unavailable"}, HTTPStatus.NOT_FOUND)
         if parsed.path == "/api/overview":
             return self._send(overview_status(self.server.config))
+        if parsed.path == "/api/streaming-auth":
+            return self._send(streaming_auth_status(self.server.config, self.server.tidal_auth))
         if parsed.path == "/api/log":
             name = query.get("name", [""])[0]
             filename = available_logs().get(name)
@@ -781,6 +958,35 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send({"saved": True, "backup": backup.name})
             except (OSError, ValueError) as error:
                 return self._send({"error": str(error)}, HTTPStatus.CONFLICT)
+        if path == "/api/streaming-auth/tidal/start":
+            try:
+                return self._send(self.server.tidal_auth.start(), HTTPStatus.ACCEPTED)
+            except (OSError, ValueError) as error:
+                return self._send({"error": str(error)}, HTTPStatus.CONFLICT)
+        if path == "/api/streaming-auth/tidal/complete":
+            try:
+                return self._send(self.server.tidal_auth.complete(self._json_body().get("redirect_url")),
+                                  HTTPStatus.ACCEPTED)
+            except (OSError, ValueError) as error:
+                return self._send({"error": str(error)}, HTTPStatus.CONFLICT)
+        if path == "/api/streaming-auth/tidal/cancel":
+            self.server.tidal_auth.stop()
+            return self._send(self.server.tidal_auth.status())
+        if path == "/api/streaming-auth/deezer":
+            try:
+                backup = save_deezer_arl(self._json_body().get("arl"))
+                config = read_config()
+                self.server.config = config
+                self.server.store.reload_config(config)
+                return self._send({"saved": True, "backup": backup.name})
+            except (OSError, ValueError) as error:
+                return self._send({"error": str(error)}, HTTPStatus.CONFLICT)
+        if path == "/api/musicbrainz-catalog/submitted":
+            try:
+                record = mark_catalog_submitted(self._json_body().get("mbid"))
+                return self._send({"saved": True, "submitted_at": record["submitted_at"]})
+            except (OSError, ValueError) as error:
+                return self._send({"error": str(error)}, HTTPStatus.CONFLICT)
         match = re.fullmatch(r"/api/jobs/([a-z0-9-]+)(/stop)?", path)
         if not match: return self._send({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         try:
@@ -812,6 +1018,7 @@ def main(argv=None):
         raise SystemExit("dashboardPort must be between 1 and 65535") from None
     server = ThreadingHTTPServer((bind, port), Handler)
     server.app, server.config, server.store = args.app, config, JobStore(args.app, config)
+    server.tidal_auth = TidalAuth()
     print(f"arr-scripts dashboard: http://{bind}:{port} ({args.app})", flush=True)
     try:
         server.serve_forever()

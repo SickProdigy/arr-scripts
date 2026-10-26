@@ -637,7 +637,7 @@ backfill_path () {
 
 maintenance () {
     [ "${enableReplaygainMaintenance:-false}" = "true" ] || return 0
-    local interval="${replaygainMaintenanceDays:-7}" now last=0 lastSuccess=0 waitSeconds status
+    local interval="${replaygainMaintenanceDays:-30}" now last=0 lastSuccess=0 waitSeconds status
     if ! [[ "$interval" =~ ^[1-9][0-9]*$ ]]; then
         log "ERROR :: replaygainMaintenanceDays must be a positive integer"
         return 2
@@ -663,7 +663,7 @@ maintenance () {
         [ "$((now - last))" -ge "$waitSeconds" ] || return 0
     fi
     # Interrupted/failed attempts retry after an hour; only success earns the
-    # configured weekly interval. The lock prevents concurrent full audits.
+    # configured maintenance interval. The lock prevents concurrent full audits.
     printf '%s\n' "$now" > "$replaygainStateDir/maintenance.last-attempt"
     repairAudit="$replaygainStateDir/maintenance-audit.log"
     log "MAINTENANCE START :: $(date -u +%FT%TZ)"

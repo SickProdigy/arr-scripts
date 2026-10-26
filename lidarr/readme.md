@@ -201,7 +201,7 @@ To repair missing or partial tags from a saved audit:
 Remove `--dry-run` to apply. This processes affected albums together, checks the resulting tags, and skips albums already complete when resumed. Loose files outside album folders are reported for review.
 
 
-Set `enableReplaygainMaintenance="true"` (default `false`) for automatic audit and repair every `replaygainMaintenanceDays` days (default `7`). ReplayGain tagging must also be enabled. The first run starts when enabled. Logs: `/config/logs/replaygain-maintenance.log`; latest audit: `/config/extended/replaygain/maintenance-audit.log`. Audits record start/end times and elapsed seconds.
+Set `enableReplaygainMaintenance="true"` (default `false`) for automatic audit and repair every `replaygainMaintenanceDays` days (default `30`). ReplayGain tagging must also be enabled. The first run starts when enabled. Logs: `/config/logs/replaygain-maintenance.log`; latest audit: `/config/extended/replaygain/maintenance-audit.log`. Audits record start/end times and elapsed seconds.
 
 ## Features
 
@@ -295,7 +295,7 @@ in `extended.conf`; the normal installer includes the helper and background work
 Successful metadata tagging queues lyrics locally. The independent worker calls
 LRCMux directly, embeds results, and preserves existing lyrics without delaying
 downloads/imports. See [configuration and behavior](lyrics.md).
-Set `enableLyricsMaintenance="true"` for a weekly scan of existing songs missing
+Set `enableLyricsMaintenance="true"` for a periodic scan of existing songs missing
 lyrics. Scan and worker logs are `lyrics-maintenance.log` and `lyrics.log` in
 `/config/logs`.
 

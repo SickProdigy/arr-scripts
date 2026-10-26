@@ -382,7 +382,7 @@ def lock(state, name='worker.lock'):
             yield True
 
 
-def maintenance(state, root, days=7, clock=time.time):
+def maintenance(state, root, days=30, clock=time.time):
     if days < 1:
         raise ValueError('maintenance interval must be positive')
     root = Path(root).resolve()
@@ -428,7 +428,7 @@ def main():
     parser.add_argument('--album-id', default='')
     parser.add_argument('--work', action='store_true')
     parser.add_argument('--maintenance', type=Path, help='Periodically enqueue missing lyrics under this root')
-    parser.add_argument('--maintenance-days', type=int, default=7)
+    parser.add_argument('--maintenance-days', type=int, default=30)
     parser.add_argument('--retry', help='Reset one reviewed job ID after fixing its cause')
     parser.add_argument('--status', action='store_true', help='Show queue states and job IDs without network requests')
     args = parser.parse_args()
