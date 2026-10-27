@@ -151,7 +151,8 @@ class DashboardTests(unittest.TestCase):
 
     def test_interface_includes_overview_ratings_and_beets_editors(self):
         self.assertIn('data-page="overview"', DASHBOARD.HTML)
-        self.assertIn('data-page="streaming"', DASHBOARD.HTML)
+        self.assertNotIn('data-page="streaming"', DASHBOARD.HTML)
+        self.assertIn('<h2>Streaming accounts</h2>', DASHBOARD.HTML)
         self.assertIn('data-page="ratings"', DASHBOARD.HTML)
         self.assertNotIn('id="overviewJobs"', DASHBOARD.HTML)
         self.assertNotIn('value="beets-download"', DASHBOARD.HTML)
