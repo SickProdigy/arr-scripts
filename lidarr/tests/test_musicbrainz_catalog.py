@@ -27,6 +27,10 @@ class MusicBrainzCatalogTests(unittest.TestCase):
         self.assertEqual(5, catalog.positive_int("bad", 5))
         self.assertEqual(7, catalog.positive_int("7", 5))
 
+    def test_main_returns_failure_when_lidarr_is_not_ready(self):
+        with mock.patch.object(catalog, "scan", side_effect=OSError("connection refused")):
+            self.assertEqual(1, catalog.main([]))
+
     def test_scan_uses_existing_helper_and_saves_review(self):
         artist = {"monitored": True, "artistName": "Test Artist",
                   "foreignArtistId": "11111111-2222-3333-4444-555555555555",

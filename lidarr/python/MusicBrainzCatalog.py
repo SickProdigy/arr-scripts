@@ -172,7 +172,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true", help="scan the next batch without waiting for its due date")
     args = parser.parse_args(argv)
-    return scan(args.force)
+    try:
+        return scan(args.force)
+    except (OSError, RuntimeError, ET.ParseError, ValueError) as error:
+        print(f"MusicBrainz catalog scan deferred: {error}", flush=True)
+        return 1
 
 
 if __name__ == "__main__":
