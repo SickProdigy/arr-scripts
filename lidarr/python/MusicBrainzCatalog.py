@@ -134,7 +134,10 @@ def scan(force=False):
             missing_links += 1
             record["status"] = "missing-apple-link"
             continue
-        candidates.append((int(record.get("scanned_at") or 0), mbid, record))
+        # Failed comparisons should join the next batch instead of waiting the
+        # full successful-rescan interval (for example after a helper update).
+        scanned_at = 0 if record.get("status") == "error" else int(record.get("scanned_at") or 0)
+        candidates.append((scanned_at, mbid, record))
     candidates.sort(key=lambda row: (row[0], row[2]["artist"].casefold()))
     due_before = now - days * 86400
     selected = [row for row in candidates if force or row[0] < due_before][:batch]

@@ -50,6 +50,25 @@ class MusicBrainzCatalogTests(unittest.TestCase):
             self.assertEqual(1, record["release_seeds"])
             self.assertIn("--artist-mbid", run.call_args.args[0])
 
+    def test_failed_artist_is_retried_before_rescan_interval(self):
+        artist = {"monitored": True, "artistName": "Retry Artist",
+                  "foreignArtistId": "11111111-2222-3333-4444-555555555555",
+                  "links": [{"url": "https://music.apple.com/us/artist/894820464"}]}
+        summary = {"apple_releases": 1, "exact_musicbrainz_releases": 1, "release_seeds": 0}
+        with tempfile.TemporaryDirectory() as root:
+            state_dir = Path(root)
+            state = {"artists": {artist["foreignArtistId"]: {
+                "artist": "Retry Artist", "status": "error", "scanned_at": 9999999999,
+                "apple_url": artist["links"][0]["url"]}}}
+            (state_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            with mock.patch.object(catalog, "STATE_DIR", state_dir), \
+                 mock.patch.object(catalog, "STATE_FILE", state_dir / "state.json"), \
+                 mock.patch.object(catalog, "read_config", return_value={"enableMusicBrainzCatalog": "true"}), \
+                 mock.patch.object(catalog, "lidarr_artists", return_value=[artist]), \
+                 mock.patch.object(catalog.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(summary), stderr="")) as run:
+                self.assertEqual(0, catalog.scan())
+            run.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
