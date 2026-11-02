@@ -410,7 +410,8 @@ class Worker:
             if len(names) != len(set(names)) or self.excluded(ident, candidate):
                 continue
             next_data = {k:data[k] for k in ("search","label","audioPolicy","attempted") if k in data}
-            next_data.update(candidate, candidates=candidates, batch=str(uuid.uuid4()))
+            next_data.update(candidate, candidates=candidates, batch=str(uuid.uuid4()),
+                             progressBytes=0, progressSince=self.clock())
             next_data["label"] = next_data.get("label") or f"Item {ident}"
             next_data["destination"] = staging_destination(self.app, next_data["label"], next_data["batch"])
             debug(f"Soulseek {self.app}: item {ident}: selected candidate with {len(candidate['files'])} files; {len(candidates)} alternates remain")
@@ -450,6 +451,16 @@ class Worker:
         else:
             data.pop("offlineSince",None)
         return "offlineSince" in data
+
+    def observe_stalled(self, data, transfers):
+        """Expire a queued/active batch that has made no byte progress."""
+        transferred = sum(max(0, int(file.get("bytesTransferred", 0) or 0)) for file in transfers)
+        if data.get("progressBytes") != transferred:
+            data["progressBytes"] = transferred
+            data["progressSince"] = self.clock()
+        else:
+            data.setdefault("progressSince", self.clock())
+        return self.clock() - data["progressSince"] >= self.offline_grace
 
     def background_batch(self,ident,target,data):
         if self.db.execute("SELECT count(*) FROM background_batches").fetchone()[0] >= self.max_batches:
@@ -1099,6 +1110,9 @@ class Worker:
                         self.save(ident, "downloaded", data)
                     elif any("Completed" in f["state"] and "Succeeded" not in f["state"] for f in transfers):
                         self.fail_candidate(ident,data,"failed transfer") if getattr(self.slsk,"client","slskd") == "nicotine" else self.save(ident,"review",{**data,"reason":"failed transfer"})
+                    elif self.observe_stalled(data, transfers):
+                        reason = "transfer made no progress for configured grace period"
+                        self.fail_candidate(ident, data, reason) if getattr(self.slsk,"client","slskd") == "nicotine" else self.save(ident,"review",{**data,"reason":reason})
                     else:
                         self.save(ident,"downloading",data,60)
                 elif state in ("downloaded","publishing"):

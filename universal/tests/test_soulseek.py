@@ -445,6 +445,31 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.row()["state"], "review")
         self.assertFalse(self.arr.commands)
 
+    def test_queued_batch_without_progress_expires_after_grace(self):
+        self.slsk.client, self.slsk.version = "nicotine", "0.1.5"
+        ident = self.reach_batch()
+        self.slsk.batches[ident]["transfers"][0]["bytesTransferred"] = 0
+        data = json.loads(self.row()["data"])
+        data["progressSince"] = self.now
+        self.worker.save(1, "downloading", data)
+        self.tick(86399)
+        self.assertEqual(self.row()["state"], "downloading")
+        self.tick(60)
+        self.assertEqual(self.row()["state"], "failure_cleanup")
+        data = json.loads(self.row()["data"])
+        self.assertEqual(data["reason"], "transfer made no progress for configured grace period")
+
+    def test_transfer_progress_resets_stall_grace(self):
+        ident = self.reach_batch()
+        transfer = self.slsk.batches[ident]["transfers"][0]
+        transfer["bytesTransferred"] = 1
+        self.tick(86399)
+        self.assertEqual(self.row()["state"], "downloading")
+        transfer["bytesTransferred"] = 2
+        self.tick(1)
+        self.tick(86399)
+        self.assertEqual(self.row()["state"], "downloading")
+
     def test_complete_movie_import_is_validated_and_confirmed_by_library(self):
         ident = self.reach_batch()
         self.slsk.batches[ident]["transfers"][0]["state"] = "Completed, Succeeded"
@@ -587,17 +612,19 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len(self.slsk.searches), 2)
 
-    def test_slow_queued_transfer_holds_slot_until_finished(self):
+    def test_slow_queued_transfer_releases_slot_after_grace(self):
         self.worker.max_foreground_batches = 1
         self.reach_batch()
+        data = json.loads(self.row()["data"])
+        data["progressSince"] = self.now
+        self.worker.save(1, "downloading", data)
         self.arr.movies = [{**self.arr.movies[0], "id": number} for number in range(1, 10)]
-        for _ in range(3):
-            self.tick(86401)
+        self.tick(86399)
         self.assertEqual(self.row()["state"], "downloading")
         self.assertEqual(len(self.slsk.searches), 1)
-        self.arr.movies[0]["hasFile"] = True
-        self.worker.save(1, "done", {})
-        self.tick()
+        self.tick(60)
+        self.assertEqual(self.row()["state"], "review")
+        self.tick(301)
         self.assertEqual(len(self.slsk.searches), 2)
         self.assertEqual(self.worker.db.execute("SELECT count(*) FROM jobs WHERE state='searching'").fetchone()[0], 1)
 
