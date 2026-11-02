@@ -953,6 +953,37 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(self.worker.db.execute("SELECT count(*) FROM background_batches").fetchone()[0],1)
         self.assertFalse(any(path.endswith(("/clear","/cancel")) for path,_ in self.slsk.posts))
 
+    def test_idle_queued_candidate_rotates_after_15_minutes_without_blacklist(self):
+        _,data = self.seed(alternatives=True)
+        self.slsk.batches[data["batch"]]["peerOffline"] = False
+        data.update(queuedSince=self.now,queuedBytes=0)
+        self.worker.save(1,"downloading",data)
+        self.tick(899)
+        self.assertEqual(self.row()["state"],"downloading")
+        self.tick(61)
+        self.assertEqual(self.row()["state"],"failure_cleanup")
+        rotated = json.loads(self.row()["data"])
+        self.assertEqual([candidate["username"] for candidate in rotated["candidates"]],
+                         ["other",data["username"]])
+        self.assertEqual(self.worker.db.execute("SELECT count(*) FROM failed_candidates").fetchone()[0],0)
+        self.tick()
+        self.assertEqual(self.row()["state"],"enqueueing")
+        self.assertEqual(json.loads(self.row()["data"])["username"],"other")
+
+    def test_queued_byte_progress_restarts_rotation_timer(self):
+        _,data = self.seed(alternatives=True)
+        batch = self.slsk.batches[data["batch"]]
+        batch["peerOffline"] = False
+        data.update(queuedSince=self.now,queuedBytes=0)
+        self.worker.save(1,"downloading",data)
+        self.tick(899)
+        batch["transfers"][0]["bytesTransferred"] = 1
+        self.tick(61)
+        self.assertEqual(self.row()["state"],"downloading")
+        saved = json.loads(self.row()["data"])
+        self.assertEqual(saved["queuedBytes"],1)
+        self.assertEqual(saved["queuedSince"],self.now)
+
     def test_original_finishes_and_replacement_is_preserved_until_import(self):
         target,data = self.seed(alternatives=True)
         self.worker.background_batch(1,target,data)

@@ -302,12 +302,13 @@ def compact_target(target):
 
 
 class Worker:
-    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=30, notfound_days=90, offline_delay=900, offline_grace=86400, max_batches=3, max_foreground_batches=None, search_retry_days=7, release_groups=None, release_group_mode="extend"):
+    def __init__(self, app, arr, slsk, config, downloads, delay=3600, sources="", audio=False, clock=time.time, imports=None, audio_policy=None, retry_days=30, notfound_days=90, offline_delay=900, offline_grace=86400, queued_timeout=900, max_batches=3, max_foreground_batches=None, search_retry_days=7, release_groups=None, release_group_mode="extend"):
         self.failure_search_seconds = max(0,int(search_retry_days))*86400
         self.release_groups = release_groups
         self.release_group_mode = release_group_mode
         self.offline_delay = max(0,int(offline_delay))
         self.offline_grace = max(self.offline_delay,int(offline_grace))
+        self.queued_timeout = max(0,int(queued_timeout))
         self.max_batches = max(1,min(10,int(max_batches)))
         self.max_foreground_batches = max(1,min(10,int(max_foreground_batches if max_foreground_batches is not None else max_batches)))
         self.retry_seconds = max(0, int(retry_days))*86400
@@ -411,6 +412,8 @@ class Worker:
                 continue
             next_data = {k:data[k] for k in ("search","label","audioPolicy","attempted") if k in data}
             next_data.update(candidate, candidates=candidates, batch=str(uuid.uuid4()))
+            if getattr(self.slsk,"client","slskd") == "nicotine" and self.queued_timeout:
+                next_data.update(queuedSince=self.clock(),queuedBytes=0)
             next_data["label"] = next_data.get("label") or f"Item {ident}"
             next_data["destination"] = staging_destination(self.app, next_data["label"], next_data["batch"])
             debug(f"Soulseek {self.app}: item {ident}: selected candidate with {len(candidate['files'])} files; {len(candidates)} alternates remain")
@@ -447,9 +450,40 @@ class Worker:
     def observe_offline(self,data,batch):
         if batch.get("peerOffline") is True:
             data.setdefault("offlineSince",self.clock())
+            data.pop("queuedSince",None)
+            data.pop("queuedBytes",None)
         else:
             data.pop("offlineSince",None)
         return "offlineSince" in data
+
+    def queued_without_progress(self, data, transfers):
+        """Track Nicotine queued time without treating a valid peer queue as failure."""
+        if (getattr(self.slsk,"client","slskd") != "nicotine" or not self.queued_timeout
+                or not transfers or any(f.get("state") != "Queued" for f in transfers)):
+            data.pop("queuedSince",None)
+            data.pop("queuedBytes",None)
+            return False
+        transferred = sum(max(0,int(f.get("bytesTransferred",0) or 0)) for f in transfers)
+        if data.get("queuedBytes") != transferred:
+            data["queuedBytes"] = transferred
+            data["queuedSince"] = self.clock()
+        else:
+            data.setdefault("queuedSince",self.clock())
+        return self.clock()-data["queuedSince"] >= self.queued_timeout
+
+    def rotate_queued_candidate(self, ident, data):
+        """Cancel this owned attempt and retry it only after cached alternatives."""
+        current = {"username":data["username"],"files":data["files"]}
+        candidates = list(data.get("candidates",[]))
+        key = self.candidate_key(current["username"],current["files"])
+        if not any(self.candidate_key(c["username"],c["files"]) == key for c in candidates):
+            candidates.append(current)
+        rotated = {**data,"candidates":candidates,
+                   "rotationReason":f"queued transfer made no progress for {self.queued_timeout} seconds"}
+        rotated.pop("queuedSince",None)
+        rotated.pop("queuedBytes",None)
+        print(f"Soulseek {self.app}: item {ident}: queued transfer idle; trying another candidate",flush=True)
+        self.save(ident,"failure_cleanup",rotated)
 
     def background_batch(self,ident,target,data):
         if self.db.execute("SELECT count(*) FROM background_batches").fetchone()[0] >= self.max_batches:
@@ -1099,6 +1133,8 @@ class Worker:
                         self.save(ident, "downloaded", data)
                     elif any("Completed" in f["state"] and "Succeeded" not in f["state"] for f in transfers):
                         self.fail_candidate(ident,data,"failed transfer") if getattr(self.slsk,"client","slskd") == "nicotine" else self.save(ident,"review",{**data,"reason":"failed transfer"})
+                    elif not batch.get("peerOffline") and self.queued_without_progress(data,transfers):
+                        self.rotate_queued_candidate(ident,data)
                     else:
                         self.save(ident,"downloading",data,60)
                 elif state in ("downloaded","publishing"):
@@ -1239,7 +1275,7 @@ def main():
                         config, downloads, delay, os.environ.get("SOULSEEK_SOURCES", ""),
                         os.environ.get("SOULSEEK_AUDIO_ENABLED") == "true",
                         retry_days=os.environ.get("SOULSEEK_FAILED_RETRY_DAYS","30"), search_retry_days=os.environ.get("SOULSEEK_FAILED_SEARCH_DAYS","7"),
-                        offline_delay=os.environ.get("SOULSEEK_OFFLINE_DELAY","900"), offline_grace=os.environ.get("SOULSEEK_OFFLINE_GRACE","86400"), max_batches=os.environ.get("SOULSEEK_MAX_BATCHES","3"), max_foreground_batches=os.environ.get("SOULSEEK_MAX_FOREGROUND_BATCHES"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
+                        offline_delay=os.environ.get("SOULSEEK_OFFLINE_DELAY","900"), offline_grace=os.environ.get("SOULSEEK_OFFLINE_GRACE","86400"), queued_timeout=os.environ.get("SOULSEEK_QUEUED_TIMEOUT","900"), max_batches=os.environ.get("SOULSEEK_MAX_BATCHES","3"), max_foreground_batches=os.environ.get("SOULSEEK_MAX_FOREGROUND_BATCHES"), notfound_days=os.environ.get("SOULSEEK_NOTFOUND_RETRY_DAYS","90"),
                         audio_policy=AudioPolicy(os.environ.get("SOULSEEK_AUDIO_FORMAT", "native"), os.environ.get("SOULSEEK_AUDIO_BITRATE", "master"), os.environ.get("SOULSEEK_REQUIRE_QUALITY") == "true") if app == "lidarr" else None,
                         imports=os.environ.get("SOULSEEK_IMPORT_PATH", "/downloads/lidarr/import") if app == "lidarr" else None,
                         release_groups=tuple(group.strip() for group in os.environ.get("SOULSEEK_RELEASE_GROUPS", "").split(",") if group.strip()),
