@@ -106,7 +106,7 @@ def helper_result(output):
     raise RuntimeError("musicbrainz-new-artist did not return its JSON summary")
 
 
-def scan(force=False):
+def scan(force=False, artist_mbid=None):
     config = read_config()
     if config.get("enableMusicBrainzCatalog", "false").lower() != "true" and not force:
         print("MusicBrainz catalog review is disabled")
@@ -140,7 +140,15 @@ def scan(force=False):
         candidates.append((scanned_at, mbid, record))
     candidates.sort(key=lambda row: (row[0], row[2]["artist"].casefold()))
     due_before = now - days * 86400
-    selected = [row for row in candidates if force or row[0] < due_before][:batch]
+    if artist_mbid:
+        selected = [row for row in candidates if row[1].casefold() == artist_mbid.casefold()]
+        if not selected:
+            record = records.get(artist_mbid) or {}
+            if record.get("status") == "missing-apple-link":
+                raise RuntimeError("Selected artist has no Apple Music relationship")
+            raise RuntimeError("Selected monitored artist is unavailable for catalog scanning")
+    else:
+        selected = [row for row in candidates if force or row[0] < due_before][:batch]
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     for _, mbid, record in selected:
         report = STATE_DIR / f"{mbid}.html"
@@ -174,9 +182,10 @@ def scan(force=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true", help="scan the next batch without waiting for its due date")
+    parser.add_argument("--artist-mbid", help="scan only this monitored MusicBrainz artist ID")
     args = parser.parse_args(argv)
     try:
-        return scan(args.force)
+        return scan(args.force, args.artist_mbid)
     except (OSError, RuntimeError, ET.ParseError, ValueError) as error:
         print(f"MusicBrainz catalog scan deferred: {error}", flush=True)
         return 1

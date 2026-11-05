@@ -331,7 +331,7 @@ def _pending_jobs(root):
         return 0
 
 
-def musicbrainz_status(config):
+def musicbrainz_status(config, catalog_query="", catalog_page=1, catalog_status="review"):
     token_file = MUSICBRAINZ_STATE_DIR / "oauth-tokens.json"
     digest = bool(config.get("musicBrainzUsername") and
                   (config.get("musicBrainzPassword") or config.get("musicBrainzToken")))
@@ -352,7 +352,7 @@ def musicbrainz_status(config):
                 last_rating_submission = current.stat().st_mtime
             except (OSError, ValueError):
                 pass
-    catalog = musicbrainz_catalog_status(config)
+    catalog = musicbrainz_catalog_status(config, catalog_query, catalog_page, 10, catalog_status)
     return {"enabled": truthy(config.get("enableMusicBrainzHelper")),
             "username": username,
             "authenticated": digest or oauth,
@@ -364,30 +364,69 @@ def musicbrainz_status(config):
             "catalog": catalog}
 
 
-def musicbrainz_catalog_status(config):
+def musicbrainz_catalog_status(config, query="", page=1, page_size=10, status="review"):
     try:
         state = json.loads((MUSICBRAINZ_CATALOG_DIR / "state.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         state = {}
     rows = []
     for mbid, record in (state.get("artists") or {}).items():
-        if not isinstance(record, dict) or record.get("status") not in {"review", "awaiting-verification", "current", "error"}:
+        if not isinstance(record, dict) or not record.get("artist"):
             continue
         rows.append({"mbid": mbid, "artist": record.get("artist", mbid),
-                     "status": record.get("status"), "release_seeds": record.get("release_seeds", 0),
+                     "status": record.get("status") or "unscanned", "release_seeds": record.get("release_seeds", 0),
                      "apple_releases": record.get("apple_releases", 0),
                      "musicbrainz_releases": record.get("musicbrainz_releases", 0),
                      "scanned_at": record.get("scanned_at", 0), "error": record.get("error", ""),
                      "submitted_at": record.get("submitted_at", 0),
-                     "report": bool(record.get("report"))})
+                     "report": bool(record.get("report")),
+                     "scannable": bool(record.get("apple_url"))})
     rows.sort(key=lambda row: (row["status"] != "review", -int(row["scanned_at"] or 0)))
+    review_count = sum(1 for row in rows if row["status"] == "review")
+    awaiting_count = sum(1 for row in rows if row["status"] == "awaiting-verification")
+    allowed_statuses = {"all", "review", "awaiting-verification", "current", "error",
+                        "missing-apple-link", "unscanned"}
+    status = status if status in allowed_statuses else "review"
+    filtered = rows if status == "all" else [row for row in rows if row["status"] == status]
+    query = str(query or "").strip().casefold()[:200]
+    if query:
+        filtered = [row for row in filtered
+                    if query in str(row["artist"]).casefold() or query in row["mbid"].casefold()]
+    page_size = min(50, max(1, positive_int(page_size, 10)))
+    pages = max(1, (len(filtered) + page_size - 1) // page_size)
+    page = min(pages, max(1, positive_int(page, 1)))
+    offset = (page - 1) * page_size
     return {"enabled": truthy(config.get("enableMusicBrainzCatalog")),
             "last_run": state.get("last_run", 0), "monitored_artists": state.get("monitored_artists", 0),
             "eligible_artists": state.get("eligible_artists", 0),
             "missing_apple_links": state.get("missing_apple_links", 0),
-            "review_count": sum(1 for row in rows if row["status"] == "review"),
-            "awaiting_count": sum(1 for row in rows if row["status"] == "awaiting-verification"),
-            "artists": rows[:100]}
+            "review_count": review_count, "awaiting_count": awaiting_count,
+            "filtered_count": len(filtered), "page": page, "pages": pages,
+            "page_size": page_size, "status": status, "query": query,
+            "artists": filtered[offset:offset + page_size]}
+
+
+def catalog_artist_task(config, mbid):
+    if not truthy(config.get("enableMusicBrainzCatalog")):
+        raise ValueError("MusicBrainz catalog review is disabled")
+    if not isinstance(mbid, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", mbid):
+        raise ValueError("Unknown monitored artist")
+    try:
+        state = json.loads((MUSICBRAINZ_CATALOG_DIR / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("Catalog scan state is unavailable") from error
+    record = (state.get("artists") or {}).get(mbid)
+    if not isinstance(record, dict):
+        raise ValueError("Unknown monitored artist")
+    if not record.get("apple_url"):
+        raise ValueError("This artist has no Apple Music relationship to compare")
+    artist = str(record.get("artist") or mbid)
+    return {"name": f"Scan MusicBrainz catalog: {artist}", "kind": "preview",
+            "section": "musicbrainz", "workflow": "Missing catalog entries",
+            "action": "Rescan", "enabled": True,
+            "command": ["python3", "/config/extended/python/MusicBrainzCatalog.py",
+                        "--force", "--artist-mbid", mbid],
+            "description": f"Refresh the Apple Music and MusicBrainz comparison for {artist}."}
 
 
 def mark_catalog_submitted(mbid):
@@ -709,14 +748,16 @@ class JobStore:
         with self.lock:
             return sorted(self.data.values(), key=lambda job: job.get("started", 0), reverse=True)[:50]
 
-    def start(self, task_id):
+    def start(self, task_id, task_override=None, conflict_prefix=None):
         with self.lock:
-            task = self.tasks.get(task_id)
+            task = task_override or self.tasks.get(task_id)
             if not task:
                 raise KeyError("Unknown task")
             if not task["enabled"]:
                 raise ValueError("This task is disabled by extended.conf")
-            if any(job.get("task") == task_id and job.get("status") == "running" for job in self.data.values()):
+            if any((job.get("task") == task_id or
+                    (conflict_prefix and str(job.get("task", "")).startswith(conflict_prefix)))
+                   and job.get("status") == "running" for job in self.data.values()):
                 raise ValueError("This task is already running")
             preview = task.get("preview")
             max_age = positive_int(self.config.get("dashboardPreviewMaxAgeHours"), 24) * 3600
@@ -772,7 +813,7 @@ class JobStore:
 HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>arr-scripts</title><style>
 :root{color-scheme:dark;--bg:#181818;--side:#242424;--top:#202020;--panel:#202326;--line:#4a4a4a;--text:#eee;--muted:#aeb4b8;--green:#20b978;--amber:#d99425;--red:#e45d5d}
-*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--text)}button,input,select,textarea{font:inherit}.shell{min-height:100vh;display:grid;grid-template-columns:200px 1fr;grid-template-rows:60px 1fr}.top{grid-column:1/3;background:var(--top);border-bottom:1px solid #151515;display:flex;align-items:center;padding:0 18px;gap:22px}.brand{font-size:18px;font-weight:650}.appname{color:var(--muted)}.donate{margin-left:auto;color:#e84b68;text-decoration:none;font-size:24px;line-height:1;padding:8px;border-radius:4px}.donate:hover,.donate:focus{background:#353535;color:#ff6b84}.updated{margin-top:auto;padding:18px 20px 0;color:var(--muted);font-size:12px}aside{background:var(--side);padding:18px 0;display:flex;flex-direction:column}.nav{display:block;width:100%;border:0;border-left:3px solid transparent;background:transparent;color:var(--text);text-align:left;padding:13px 20px;cursor:pointer}.nav:hover{background:#2c2c2c}.nav.active{color:var(--green);border-left-color:var(--green);background:#2b2b2b}.nav .icon{display:inline-block;width:25px}.content{padding:20px;overflow:auto}.page{display:none}.page.active{display:block}h1{font-size:22px;font-weight:400;margin:0 0 7px}h2{font-size:18px;font-weight:400;margin:28px 0 10px;border-bottom:1px solid #777;padding-bottom:7px}.muted{color:var(--muted)}.notice{position:fixed;right:18px;top:70px;z-index:5;padding:11px 14px;background:#493713;border:1px solid #8e6a21;border-radius:4px;display:none;max-width:520px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 9px;border-bottom:1px solid var(--line);vertical-align:middle}th{font-weight:600;color:#cfd2d4}tr:hover td{background:#22272a}.actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}button,select,input,textarea{background:#30363a;color:var(--text);border:1px solid #555;border-radius:4px;padding:7px 10px}button{cursor:pointer}button.primary{background:#16855b;border-color:#20a970}button.write{background:#805615;border-color:#a97424}button:disabled{opacity:.42;cursor:not-allowed}.completed{color:var(--green)}.failed,.interrupted{color:var(--red)}.running,.stopping{color:var(--amber)}.pill{font-size:12px;border-radius:12px;background:#303a40;padding:2px 7px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);padding:15px;border-radius:5px}.card strong{display:block;margin-bottom:5px}.card .metric{display:block;font-size:22px;margin:5px 0}.activity-row+.activity-row{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.config-group{border-top:1px solid var(--line);padding:8px 0 14px}.field{display:grid;grid-template-columns:minmax(210px,28%) 1fr;gap:15px;padding:9px 0;align-items:center}.field label{font-weight:600}.field small{display:block;color:var(--muted);font-weight:400;margin-top:3px}.field input{width:100%;max-width:620px}.secret-row{display:flex;gap:7px;max-width:620px}.secret-row input{flex:1}pre{height:calc(100vh - 220px);min-height:360px;overflow:auto;white-space:pre-wrap;background:#0c0e10;border:1px solid var(--line);padding:12px;color:#dce6eb}.editor{width:100%;height:calc(100vh - 260px);min-height:420px;resize:vertical;font:13px ui-monospace,SFMono-Regular,Consolas,monospace;background:#0c0e10;color:#dce6eb}.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}.toolbar select{min-width:280px}.right{margin-left:auto}.empty{padding:25px;color:var(--muted);text-align:center}.mobile-menu{display:none}@media(max-width:760px){.shell{display:block}.top{height:58px;position:sticky;top:0;z-index:4}.mobile-menu{display:inline-block}aside{display:none;position:fixed;z-index:3;top:58px;bottom:0;width:210px}aside.open{display:flex}.content{padding:14px}.field{grid-template-columns:1fr}.hide-mobile{display:none}}
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--text)}button,input,select,textarea{font:inherit}.shell{min-height:100vh;display:grid;grid-template-columns:200px 1fr;grid-template-rows:60px 1fr}.top{grid-column:1/3;background:var(--top);border-bottom:1px solid #151515;display:flex;align-items:center;padding:0 18px;gap:22px}.brand{font-size:18px;font-weight:650}.appname{color:var(--muted)}.donate{margin-left:auto;color:#e84b68;text-decoration:none;font-size:24px;line-height:1;padding:8px;border-radius:4px}.donate:hover,.donate:focus{background:#353535;color:#ff6b84}.updated{margin-top:auto;padding:18px 20px 0;color:var(--muted);font-size:12px}aside{background:var(--side);padding:18px 0;display:flex;flex-direction:column}.nav{display:block;width:100%;border:0;border-left:3px solid transparent;background:transparent;color:var(--text);text-align:left;padding:13px 20px;cursor:pointer}.nav:hover{background:#2c2c2c}.nav.active{color:var(--green);border-left-color:var(--green);background:#2b2b2b}.nav .icon{display:inline-block;width:25px}.content{padding:20px;overflow:auto}.page{display:none}.page.active{display:block}h1{font-size:22px;font-weight:400;margin:0 0 7px}h2{font-size:18px;font-weight:400;margin:28px 0 10px;border-bottom:1px solid #777;padding-bottom:7px}.muted{color:var(--muted)}.notice{position:fixed;right:18px;top:70px;z-index:5;padding:11px 14px;background:#493713;border:1px solid #8e6a21;border-radius:4px;display:none;max-width:520px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 9px;border-bottom:1px solid var(--line);vertical-align:middle}th{font-weight:600;color:#cfd2d4}tr:hover td{background:#22272a}.actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}button,select,input,textarea{background:#30363a;color:var(--text);border:1px solid #555;border-radius:4px;padding:7px 10px}button{cursor:pointer}button.primary{background:#16855b;border-color:#20a970}button.write{background:#805615;border-color:#a97424}button:disabled{opacity:.42;cursor:not-allowed}.completed{color:var(--green)}.failed,.interrupted{color:var(--red)}.running,.stopping{color:var(--amber)}.pill{font-size:12px;border-radius:12px;background:#303a40;padding:2px 7px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);padding:15px;border-radius:5px}.card strong{display:block;margin-bottom:5px}.card .metric{display:block;font-size:22px;margin:5px 0}.activity-row+.activity-row{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.config-group{border-top:1px solid var(--line);padding:8px 0 14px}.field{display:grid;grid-template-columns:minmax(210px,28%) 1fr;gap:15px;padding:9px 0;align-items:center}.field label{font-weight:600}.field small{display:block;color:var(--muted);font-weight:400;margin-top:3px}.field input{width:100%;max-width:620px}.secret-row{display:flex;gap:7px;max-width:620px}.secret-row input{flex:1}pre{height:calc(100vh - 220px);min-height:360px;overflow:auto;white-space:pre-wrap;background:#0c0e10;border:1px solid var(--line);padding:12px;color:#dce6eb}.editor{width:100%;height:calc(100vh - 260px);min-height:420px;resize:vertical;font:13px ui-monospace,SFMono-Regular,Consolas,monospace;background:#0c0e10;color:#dce6eb}.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}.toolbar select{min-width:280px}.catalog-tools{margin:14px 0 5px}.catalog-tools input{min-width:260px;flex:1;max-width:520px}.catalog-tools select{min-width:180px}.pagination{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:12px}.right{margin-left:auto}.empty{padding:25px;color:var(--muted);text-align:center}.mobile-menu{display:none}@media(max-width:760px){.shell{display:block}.top{height:58px;position:sticky;top:0;z-index:4}.mobile-menu{display:inline-block}aside{display:none;position:fixed;z-index:3;top:58px;bottom:0;width:210px}aside.open{display:flex}.content{padding:14px}.field{grid-template-columns:1fr}.hide-mobile{display:none}}
 </style></head><body><div class="shell"><header class="top"><button class="mobile-menu" onclick="document.querySelector('aside').classList.toggle('open')">☰</button><div class="brand">arr-scripts</div><div class="appname" id="app"></div><a class="donate" href="https://sickgaming.net/donate" target="_blank" rel="noopener noreferrer" title="Donate to SickGaming" aria-label="Donate to SickGaming">♥</a></header><aside>
 <button class="nav active" data-page="overview"><span class="icon">⌂</span>Overview</button>
 <button class="nav" data-page="tasks"><span class="icon">◷</span>Tasks</button>
@@ -785,7 +826,7 @@ HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 <section id="overview" class="page active"><h1>Overview</h1><div class="muted">Current Lidarr automation, queues, and recent activity</div><div class="cards" id="overviewCards"></div><h2>Streaming accounts</h2><div class="cards" id="streamingCards"></div></section>
 <section id="tasks" class="page"><h1>Tasks</h1><div class="muted">Scheduled maintenance and manual library workflows</div><h2>Scheduled</h2><table><thead><tr><th>Name</th><th>Interval</th><th>Last execution</th><th class="hide-mobile">Last duration</th><th>Next execution</th><th></th></tr></thead><tbody id="scheduled"></tbody></table><h2>Manual workflows</h2><table><thead><tr><th>Name</th><th>Last execution</th><th>Status</th><th></th></tr></thead><tbody id="manual"></tbody></table><h2>Queue</h2><table><thead><tr><th>Name</th><th>Status</th><th>Started</th><th>Duration</th><th></th></tr></thead><tbody id="jobs"></tbody></table></section>
 <section id="ratings" class="page"><h1>Ratings</h1><div class="muted">SonicRatings imports provider ratings into Navidrome or another Subsonic server</div><div class="cards" id="ratingsStatus"></div><h2>Rating workflows</h2><table><tbody id="ratingsTasks"></tbody></table></section>
-<section id="musicbrainz" class="page"><h1>MusicBrainz</h1><div class="muted">Contribute metadata from monitored Lidarr music with review before submission</div><div class="cards" id="mbStatus"></div><h2>Contribution workflows</h2><table><tbody id="mbTasks"></tbody></table><h2>Missing catalog entries</h2><div class="cards" id="catalogStatus"></div><table><thead><tr><th>Artist</th><th>Catalog comparison</th><th>Last scan</th><th></th></tr></thead><tbody id="catalogRows"></tbody></table></section>
+<section id="musicbrainz" class="page"><h1>MusicBrainz</h1><div class="muted">Contribute metadata from monitored Lidarr music with review before submission</div><div class="cards" id="mbStatus"></div><h2>Contribution workflows</h2><table><tbody id="mbTasks"></tbody></table><h2>Missing catalog entries</h2><div class="cards" id="catalogStatus"></div><div class="toolbar catalog-tools"><input id="catalogSearch" placeholder="Search monitored artist or MusicBrainz ID" onkeydown="if(event.key==='Enter')searchCatalog()"><select id="catalogFilter" onchange="filterCatalog(this.value)"><option value="review">Ready for review</option><option value="awaiting-verification">Awaiting verification</option><option value="error">Scan failed</option><option value="current">Already synchronized</option><option value="missing-apple-link">Missing Apple Music link</option><option value="unscanned">Not scanned yet</option><option value="all">All monitored artists</option></select><button class="primary" onclick="searchCatalog()">Search</button><button onclick="clearCatalogSearch()">Clear</button></div><table><thead><tr><th>Artist</th><th>Catalog comparison</th><th>Last scan</th><th></th></tr></thead><tbody id="catalogRows"></tbody></table><div class="pagination"><button id="catalogPrev" onclick="catalogTurn(-1)">Previous</button><span id="catalogPage"></span><button id="catalogNext" onclick="catalogTurn(1)">Next</button></div></section>
 <section id="configuration" class="page"><h1>Configuration</h1><div class="muted">Edit arr-scripts and Beets configuration. A timestamped backup is created on every save.</div><div class="toolbar"><select id="configFile" onchange="renderConfig()"><option value="extended">extended.conf settings</option><option value="beets">Beets - post-import enrichment</option><option value="genre-whitelist">Beets genre whitelist</option></select><span class="muted" id="configState"></span></div><div id="config"></div><textarea id="configEditor" class="editor" hidden spellcheck="false"></textarea><div class="toolbar"><button class="primary" onclick="saveConfig()">Save changes</button></div></section>
 <section id="logs" class="page"><h1>Logs</h1><div class="toolbar"><select id="logSelect"></select><input id="logFilter" placeholder="Filter displayed log" oninput="renderLog()"><button onclick="loadLog()">Refresh</button></div><pre id="log">Select a log.</pre></section>
 </main></div><script>
@@ -795,7 +836,7 @@ const relative=v=>{if(!v)return '-';const n=Math.round(v-Date.now()/1000),a=Math
 const providerName=p=>({musicbrainz:'MusicBrainz',lastfm:'Last.fm',spotify:'Spotify',tidal:'TIDAL',discogs:'Discogs'}[p]||p);
 const providerOrder=p=>p.length<2?(p.length?providerName(p[0])+' only':'No provider configured'):providerName(p[0])+' first, then '+p.slice(1).map(providerName).join(', then ');
 const duration=v=>v==null?'-':new Date(Math.max(0,v)*1000).toISOString().slice(11,19);
-let state={tasks:[],jobs:[],logs:{}},activeJobLog='',rawLog='',configChanges={},configFileContent='';
+let state={tasks:[],jobs:[],logs:{}},activeJobLog='',rawLog='',configChanges={},configFileContent='',catalogPage=1,catalogPages=1,catalogQuery='',catalogStatus='review';
 function note(message){const n=document.querySelector('#notice');n.textContent=message;n.style.display='block';setTimeout(()=>n.style.display='none',7000)}
 async function api(path,options){const r=await fetch(path,options);const data=await r.json();if(!r.ok)throw Error(data.error||r.statusText);return data}
 function taskButtons(tasks){return `<div class="actions">${tasks.map(t=>`<button class="${t.kind==='write'?'write':'primary'}" title="${esc(!t.enabled?'Disabled in configuration':!t.preview_ready?'Complete the preview first':t.description)}" ${!t.enabled||!t.preview_ready?'disabled':''} onclick="start('${esc(t.id)}')">${esc(!t.enabled?'Disabled':!t.preview_ready?'Preview required':t.action)}</button>`).join('')}</div>`}
@@ -811,7 +852,12 @@ async function finishTidal(){const value=document.querySelector('#tidalRedirect'
 async function cancelTidal(){try{await api('/api/streaming-auth/tidal/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await renderStreaming()}catch(e){note(e.message)}}
 async function saveDeezer(){const value=document.querySelector('#deezerArl')?.value||'';try{await api('/api/streaming-auth/deezer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({arl:value})});note('Deezer ARL saved');await renderStreaming()}catch(e){note(e.message)}}
 async function renderRatings(){try{const r=await api('/api/ratings');document.querySelector('#ratingsStatus').innerHTML=`<div class="card"><strong>Automation</strong><span class="${r.enabled?'completed':'failed'}">${r.enabled?'Enabled':'Disabled'}</span></div><div class="card"><strong>Subsonic server</strong><span class="${r.server_configured?'completed':'failed'}">${r.server_configured?'Configured':'Not configured'}</span></div><div class="card"><strong>Fallback order</strong>${esc(providerOrder(r.providers))}</div><div class="card"><strong>Pending imported albums</strong><span class="metric">${r.pending_jobs}</span></div><div class="card"><strong>Last activity</strong>${when(r.last_activity)}</div>`;document.querySelector('#ratingsTasks').innerHTML=Object.entries(workflows('ratings')).map(([name,ts])=>`<tr><td>${esc(name)}<div class="muted">${esc(ts[0].description)}</div></td><td>${taskButtons(ts)}</td></tr>`).join('')||'<tr><td class="empty">No rating workflows available.</td></tr>'}catch(e){note(e.message)}}
-async function renderMusicBrainz(){try{const m=await api('/api/musicbrainz'),c=m.catalog;document.querySelector('#mbStatus').innerHTML=`<div class="card"><strong>Helper</strong><span class="${m.enabled?'completed':'failed'}">${m.enabled?'Enabled':'Disabled'}</span></div><div class="card"><strong>Account</strong>${esc(m.username||'Not configured')}</div><div class="card"><strong>Authentication</strong><span class="${m.authenticated?'completed':'failed'}">${esc(m.authentication)}</span></div><div class="card"><strong>Submitted recording ratings</strong><span class="metric">${m.submitted_ratings}</span><span class="muted">${m.last_rating_submission?'Last submission '+relative(m.last_rating_submission):'No submissions recorded'}</span></div><div class="card"><strong>Pending genre jobs</strong><span class="metric">${m.genre_jobs}</span></div><div class="card"><strong>Pending rating jobs</strong><span class="metric">${m.rating_jobs}</span></div>`;document.querySelector('#mbTasks').innerHTML=Object.entries(workflows('musicbrainz')).map(([name,ts])=>`<tr><td>${esc(name)}<div class="muted">${esc(ts[0].description)}</div></td><td>${taskButtons(ts)}</td></tr>`).join('');document.querySelector('#catalogStatus').innerHTML=`<div class="card"><strong>Catalog scan</strong><span class="${c.enabled?'completed':'failed'}">${c.enabled?'Enabled':'Disabled'}</span><div class="muted">${c.last_run?'Last run '+relative(c.last_run):'Not run yet'}</div></div><div class="card"><strong>Ready for review</strong><span class="metric">${c.review_count}</span><span class="muted">${c.awaiting_count} awaiting verification</span></div><div class="card"><strong>Eligible monitored artists</strong><span class="metric">${c.eligible_artists}</span><span class="muted">${c.missing_apple_links} without Apple Music links</span></div>`;document.querySelector('#catalogRows').innerHTML=c.artists.map(r=>`<tr><td>${esc(r.artist)}<div class="muted">${esc(r.mbid)}</div></td><td><span class="${r.status==='error'?'failed':r.status==='review'?'running':'completed'}">${r.status==='review'?r.release_seeds+' possible missing':r.status==='awaiting-verification'?'Awaiting MusicBrainz verification':r.status==='current'?'No missing releases':'Scan failed'}</span><div class="muted">${r.apple_releases} Apple Music · ${r.musicbrainz_releases} exact MusicBrainz${r.submitted_at?' · marked submitted '+relative(r.submitted_at):''}${r.error?' · '+esc(r.error):''}</div></td><td>${when(r.scanned_at)}</td><td>${r.report?`<a class="button" target="_blank" rel="noopener noreferrer" href="/api/musicbrainz-catalog/report?id=${encodeURIComponent(r.mbid)}">Review</a>`:''}${r.status==='review'?` <button onclick="markCatalogSubmitted('${esc(r.mbid)}')">Mark submitted</button>`:''}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">No artists have been scanned yet. Enable catalog review, then scan the first batch.</td></tr>'}catch(e){note(e.message)}}
+async function renderMusicBrainz(){try{const params=new URLSearchParams({catalog_query:catalogQuery,catalog_page:String(catalogPage),catalog_status:catalogStatus}),m=await api('/api/musicbrainz?'+params),c=m.catalog;catalogPage=c.page;catalogPages=c.pages;document.querySelector('#catalogSearch').value=catalogQuery;document.querySelector('#catalogFilter').value=catalogStatus;document.querySelector('#mbStatus').innerHTML=`<div class="card"><strong>Helper</strong><span class="${m.enabled?'completed':'failed'}">${m.enabled?'Enabled':'Disabled'}</span></div><div class="card"><strong>Account</strong>${esc(m.username||'Not configured')}</div><div class="card"><strong>Authentication</strong><span class="${m.authenticated?'completed':'failed'}">${esc(m.authentication)}</span></div><div class="card"><strong>Submitted recording ratings</strong><span class="metric">${m.submitted_ratings}</span><span class="muted">${m.last_rating_submission?'Last submission '+relative(m.last_rating_submission):'No submissions recorded'}</span></div><div class="card"><strong>Pending genre jobs</strong><span class="metric">${m.genre_jobs}</span></div><div class="card"><strong>Pending rating jobs</strong><span class="metric">${m.rating_jobs}</span></div>`;document.querySelector('#mbTasks').innerHTML=Object.entries(workflows('musicbrainz')).map(([name,ts])=>`<tr><td>${esc(name)}<div class="muted">${esc(ts[0].description)}</div></td><td>${taskButtons(ts)}</td></tr>`).join('');document.querySelector('#catalogStatus').innerHTML=`<div class="card"><strong>Catalog scan</strong><span class="${c.enabled?'completed':'failed'}">${c.enabled?'Enabled':'Disabled'}</span><div class="muted">${c.last_run?'Last run '+relative(c.last_run):'Not run yet'}</div></div><div class="card"><strong>Ready for review</strong><span class="metric">${c.review_count}</span><span class="muted">${c.awaiting_count} awaiting verification</span></div><div class="card"><strong>Eligible monitored artists</strong><span class="metric">${c.eligible_artists}</span><span class="muted">${c.missing_apple_links} without Apple Music links</span></div>`;const labels={review:r=>r.release_seeds+' possible missing','awaiting-verification':()=> 'Awaiting MusicBrainz verification',current:()=> 'No missing releases',error:()=> 'Scan failed','missing-apple-link':()=> 'Missing Apple Music relationship',unscanned:()=> 'Not scanned yet'};document.querySelector('#catalogRows').innerHTML=c.artists.map(r=>`<tr><td>${esc(r.artist)}<div class="muted">${esc(r.mbid)}</div></td><td><span class="${r.status==='error'?'failed':r.status==='review'?'running':'completed'}">${esc((labels[r.status]||(()=>r.status))(r))}</span><div class="muted">${r.apple_releases} Apple Music · ${r.musicbrainz_releases} exact MusicBrainz${r.submitted_at?' · marked submitted '+relative(r.submitted_at):''}${r.error?' · '+esc(r.error):''}</div></td><td>${when(r.scanned_at)}</td><td><div class="actions">${r.report?`<a class="button" target="_blank" rel="noopener noreferrer" href="/api/musicbrainz-catalog/report?id=${encodeURIComponent(r.mbid)}">Review</a>`:''}${r.status==='review'?`<button onclick="markCatalogSubmitted('${esc(r.mbid)}')">Mark submitted</button>`:''}<button ${r.scannable?'':'disabled'} onclick="rescanCatalogArtist('${esc(r.mbid)}')">Rescan</button></div></td></tr>`).join('')||'<tr><td colspan="4" class="empty">No artists match this search and status filter.</td></tr>';document.querySelector('#catalogPage').textContent=`Page ${c.page} of ${c.pages} · ${c.filtered_count} artists`;document.querySelector('#catalogPrev').disabled=c.page<=1;document.querySelector('#catalogNext').disabled=c.page>=c.pages}catch(e){note(e.message)}}
+function searchCatalog(){catalogQuery=document.querySelector('#catalogSearch').value.trim();if(catalogQuery&&catalogStatus==='review'){catalogStatus='all';document.querySelector('#catalogFilter').value='all'}catalogPage=1;renderMusicBrainz()}
+function clearCatalogSearch(){catalogQuery='';catalogPage=1;document.querySelector('#catalogSearch').value='';renderMusicBrainz()}
+function filterCatalog(value){catalogStatus=value;catalogPage=1;renderMusicBrainz()}
+function catalogTurn(change){catalogPage=Math.max(1,Math.min(catalogPages,catalogPage+change));renderMusicBrainz()}
+async function rescanCatalogArtist(mbid){try{await api('/api/musicbrainz-catalog/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mbid})});note('Artist catalog rescan started. Track it under Tasks or Logs.');await refresh()}catch(e){note(e.message)}}
 async function markCatalogSubmitted(mbid){try{await api('/api/musicbrainz-catalog/submitted',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mbid})});note('Marked submitted; the next scan will verify MusicBrainz.');await renderMusicBrainz()}catch(e){note(e.message)}}
 async function renderConfig(){try{const selected=document.querySelector('#configFile').value,form=document.querySelector('#config'),editor=document.querySelector('#configEditor');configChanges={};document.querySelector('#configState').textContent='';if(selected==='extended'){const d=await api('/api/config');editor.hidden=true;form.hidden=false;form.innerHTML=d.groups.map(g=>`<div class="config-group"><h2>${esc(g.name)}</h2>${g.fields.map(f=>`<div class="field"><label>${esc(f.name)}<small>${esc(f.description)}</small></label>${f.secret?`<div class="secret-row"><input type="password" data-key="${esc(f.name)}" placeholder="${f.configured?'Configured — enter to replace':'Not configured'}"><button onclick="clearSecret('${esc(f.name)}')">Clear</button></div>`:`<input data-key="${esc(f.name)}" value="${esc(f.value)}">`}</div>`).join('')}</div>`).join('');document.querySelectorAll('[data-key]').forEach(e=>e.addEventListener('input',()=>{configChanges[e.dataset.key]=e.value;document.querySelector('#configState').textContent='Unsaved changes'}))}else{const d=await api('/api/config-file?name='+encodeURIComponent(selected));form.hidden=true;editor.hidden=false;editor.value=d.content;configFileContent=d.content;editor.oninput=()=>document.querySelector('#configState').textContent=editor.value===configFileContent?'':'Unsaved changes'}}catch(e){note(e.message)}}
 function clearSecret(key){configChanges[key]='';const e=document.querySelector(`[data-key="${CSS.escape(key)}"]`);if(e)e.value='';document.querySelector('#configState').textContent='Secret will be cleared'}
@@ -907,7 +953,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/ratings":
             return self._send(ratings_status(self.server.config))
         if parsed.path == "/api/musicbrainz":
-            return self._send(musicbrainz_status(self.server.config))
+            return self._send(musicbrainz_status(
+                self.server.config,
+                query.get("catalog_query", [""])[0],
+                query.get("catalog_page", ["1"])[0],
+                query.get("catalog_status", ["review"])[0]))
         if parsed.path == "/api/musicbrainz-catalog/report":
             mbid = query.get("id", [""])[0]
             if not re.fullmatch(r"[0-9a-fA-F-]{36}", mbid):
@@ -984,6 +1034,16 @@ class Handler(BaseHTTPRequestHandler):
                 record = mark_catalog_submitted(self._json_body().get("mbid"))
                 return self._send({"saved": True, "submitted_at": record["submitted_at"]})
             except (OSError, ValueError) as error:
+                return self._send({"error": str(error)}, HTTPStatus.CONFLICT)
+        if path == "/api/musicbrainz-catalog/scan":
+            try:
+                body = self._json_body()
+                mbid = body.get("mbid")
+                task = catalog_artist_task(self.server.config, mbid)
+                job = self.server.store.start("musicbrainz-catalog-artist-" + mbid, task,
+                                              "musicbrainz-catalog")
+                return self._send(job, HTTPStatus.ACCEPTED)
+            except (KeyError, OSError, ValueError) as error:
                 return self._send({"error": str(error)}, HTTPStatus.CONFLICT)
         match = re.fullmatch(r"/api/jobs/([a-z0-9-]+)(/stop)?", path)
         if not match: return self._send({"error": "Not found"}, HTTPStatus.NOT_FOUND)

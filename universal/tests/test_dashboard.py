@@ -231,6 +231,42 @@ class DashboardTests(unittest.TestCase):
             finally:
                 DASHBOARD.MUSICBRAINZ_CATALOG_DIR = old
 
+    def test_catalog_review_rows_are_searchable_and_paginated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = DASHBOARD.MUSICBRAINZ_CATALOG_DIR
+            DASHBOARD.MUSICBRAINZ_CATALOG_DIR = Path(directory)
+            artists = {}
+            for index in range(19):
+                mbid = f"00000000-0000-4000-8000-{index:012d}"
+                artists[mbid] = {"artist": f"Artist {index:02d}", "status": "review",
+                                 "release_seeds": index + 1,
+                                 "apple_url": f"https://music.apple.com/us/artist/{index}"}
+            (Path(directory) / "state.json").write_text(json.dumps({"artists": artists}), encoding="utf-8")
+            try:
+                first = DASHBOARD.musicbrainz_catalog_status({}, page=1)
+                second = DASHBOARD.musicbrainz_catalog_status({}, page=2)
+                found = DASHBOARD.musicbrainz_catalog_status({}, "Artist 17", 1, 10, "all")
+                self.assertEqual((19, 2, 10), (first["filtered_count"], first["pages"], len(first["artists"])))
+                self.assertEqual(9, len(second["artists"]))
+                self.assertEqual("Artist 17", found["artists"][0]["artist"])
+            finally:
+                DASHBOARD.MUSICBRAINZ_CATALOG_DIR = old
+
+    def test_specific_catalog_task_uses_only_selected_artist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = DASHBOARD.MUSICBRAINZ_CATALOG_DIR
+            DASHBOARD.MUSICBRAINZ_CATALOG_DIR = Path(directory)
+            mbid = "11111111-2222-3333-4444-555555555555"
+            state = {"artists": {mbid: {"artist": "Test Artist", "status": "review",
+                                         "apple_url": "https://music.apple.com/us/artist/1"}}}
+            (Path(directory) / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            try:
+                task = DASHBOARD.catalog_artist_task({"enableMusicBrainzCatalog": "true"}, mbid)
+                self.assertEqual(["--force", "--artist-mbid", mbid], task["command"][-3:])
+                self.assertIn("Test Artist", task["name"])
+            finally:
+                DASHBOARD.MUSICBRAINZ_CATALOG_DIR = old
+
     def test_log_catalog_only_returns_real_log_files(self):
         with tempfile.TemporaryDirectory() as directory:
             old = DASHBOARD.LOG_DIR

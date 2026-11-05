@@ -69,6 +69,24 @@ class MusicBrainzCatalogTests(unittest.TestCase):
                 self.assertEqual(0, catalog.scan())
             run.assert_called_once()
 
+    def test_specific_artist_scan_ignores_batch_order_and_due_date(self):
+        first = {"monitored": True, "foreignArtistId": "11111111-1111-1111-1111-111111111111",
+                 "artistName": "First", "links": [{"url": "https://music.apple.com/us/artist/1"}]}
+        selected = {"monitored": True, "foreignArtistId": "22222222-2222-2222-2222-222222222222",
+                    "artistName": "Selected", "links": [{"url": "https://music.apple.com/us/artist/2"}]}
+        summary = {"release_seeds": 0, "apple_releases": 2, "exact_musicbrainz_releases": 2}
+        with tempfile.TemporaryDirectory() as root:
+            state_dir = Path(root)
+            with mock.patch.object(catalog, "STATE_DIR", state_dir), \
+                 mock.patch.object(catalog, "STATE_FILE", state_dir / "state.json"), \
+                 mock.patch.object(catalog, "read_config", return_value={"enableMusicBrainzCatalog": "true"}), \
+                 mock.patch.object(catalog, "lidarr_artists", return_value=[first, selected]), \
+                 mock.patch.object(catalog.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(summary), stderr="")) as run:
+                self.assertEqual(0, catalog.scan(artist_mbid=selected["foreignArtistId"]))
+            command = run.call_args.args[0]
+            self.assertIn(selected["foreignArtistId"], command)
+            self.assertNotIn(first["foreignArtistId"], command)
+
 
 if __name__ == "__main__":
     unittest.main()
